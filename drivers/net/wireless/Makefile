@@ -55,6 +55,8 @@ obj-$(CONFIG_WL_TI)	+= ti/
 
 obj-$(CONFIG_MWIFIEX)	+= mwifiex/
 
+obj-$(CONFIG_QCA_CLD_WLAN)  += qcacld-2.0/
+
 # Android Version Check from Platform source
 ifneq ($(ANDROID_VERSION),)
 MAJOR_VERSION := $(shell echo $(ANDROID_VERSION) | rev | cut -c 5- | rev)
