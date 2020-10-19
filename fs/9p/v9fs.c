@@ -356,7 +356,7 @@ struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
 	}
 	init_rwsem(&v9ses->rename_sem);
 
-	rc = bdi_setup_and_register(&v9ses->bdi, "9p", BDI_CAP_MAP_COPY);
+	rc = bdi_setup_and_register(&v9ses->bdi, "9p");
 	if (rc) {
 		kfree(v9ses->aname);
 		kfree(v9ses->uname);
@@ -463,10 +463,9 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
 	}
 
 #ifdef CONFIG_9P_FSCACHE
-	if (v9ses->fscache) {
+	if (v9ses->fscache)
 		v9fs_cache_session_put_cookie(v9ses);
-		kfree(v9ses->cachetag);
-	}
+	kfree(v9ses->cachetag);
 #endif
 	kfree(v9ses->uname);
 	kfree(v9ses->aname);

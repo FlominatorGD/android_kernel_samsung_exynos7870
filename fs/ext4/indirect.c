@@ -565,7 +565,7 @@ int ext4_ind_map_blocks(handle_t *handle, struct inode *inode,
 				       EXT4_FEATURE_RO_COMPAT_BIGALLOC)) {
 		EXT4_ERROR_INODE(inode, "Can't allocate blocks for "
 				 "non-extent mapped inodes with bigalloc");
-		return -EUCLEAN;
+		return -EFSCORRUPTED;
 	}
 
 	/* Set up for the direct block allocation */
@@ -682,17 +682,17 @@ retry:
 		 * via ext4_inode_block_unlocked_dio(). Check inode's state
 		 * while holding extra i_dio_count ref.
 		 */
-		atomic_inc(&inode->i_dio_count);
+		inode_dio_begin(inode);
 		smp_mb();
 		if (unlikely(ext4_test_inode_state(inode,
 						    EXT4_STATE_DIOREAD_LOCK))) {
-			inode_dio_done(inode);
+			inode_dio_end(inode);
 			goto locked;
 		}
 		ret = __blockdev_direct_IO(rw, iocb, inode,
 				 inode->i_sb->s_bdev, iter, offset,
 				 ext4_get_block, NULL, NULL, 0);
-		inode_dio_done(inode);
+		inode_dio_end(inode);
 	} else {
 locked:
 		ret = blockdev_direct_IO(rw, iocb, inode, iter,

@@ -1114,9 +1114,10 @@ int scsi_init_io(struct scsi_cmnd *cmd, gfp_t gfp_mask)
 	struct scsi_device *sdev = cmd->device;
 	struct request *rq = cmd->request;
 	bool is_mq = (rq->mq_ctx != NULL);
-	int error;
+	int error = BLKPREP_KILL;
 
-	BUG_ON(!rq->nr_phys_segments);
+	if (WARN_ON_ONCE(!rq->nr_phys_segments))
+		goto err_exit;
 
 	error = scsi_init_sgtable(rq, &cmd->sdb, gfp_mask);
 	if (error)

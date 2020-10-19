@@ -509,7 +509,7 @@ static void check_holdout_task(struct task_struct *t,
 	if (!needreport)
 		return;
 	if (*firstreport) {
-		pr_auto(ASL1, "INFO: rcu_tasks detected stalls on tasks:\n");
+		pr_err("INFO: rcu_tasks detected stalls on tasks:\n");
 		*firstreport = false;
 	}
 	cpu = task_cpu(t);
@@ -531,7 +531,8 @@ static int __noreturn rcu_tasks_kthread(void *arg)
 	struct rcu_head *next;
 	LIST_HEAD(rcu_tasks_holdouts);
 
-	/* FIXME: Add housekeeping affinity. */
+	/* Run on housekeeping CPUs by default.  Sysadm can move if desired. */
+	housekeeping_affine(current);
 
 	/*
 	 * Each pass through the following loop makes one check for

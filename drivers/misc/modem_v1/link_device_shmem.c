@@ -197,8 +197,22 @@ static void shmem_handle_cp_crash(struct mem_link_device *mld,
 	stop_net_ifaces(ld);
 	purge_txq(mld);
 
-	if (cp_online(mc))
-		modem_notify_event(state);
+	if (cp_online(mc)) {
+		switch (state) {
+		case STATE_CRASH_RESET:
+			modem_notify_event(MODEM_EVENT_RESET);
+			break;
+		case STATE_CRASH_EXIT:
+			modem_notify_event(MODEM_EVENT_EXIT);
+			break;
+		case STATE_CRASH_WATCHDOG:
+			modem_notify_event(MODEM_EVENT_WATCHDOG);
+			break;
+		default:
+			mif_err("Invalid state to notify\n");
+			break;
+		}
+	}
 
 	if (cp_online(mc) || cp_booting(mc))
 		set_modem_state(mld, state);
@@ -241,9 +255,6 @@ static void shmem_forced_cp_crash(struct mem_link_device *mld)
 			FUNC, ld->name, mc->name, mc_state(mc), CALLER);
 		return;
 	}
-
-	/* Disable debug Snapshot */
-	mif_set_snapshot(false);
 
 	if (mld->attrs & LINK_ATTR(LINK_ATTR_MEM_DUMP)) {
 		stop_net_ifaces(ld);
@@ -470,9 +481,6 @@ static void cmd_crash_exit_handler(struct mem_link_device *mld)
 	struct link_device *ld = &mld->link_dev;
 	struct modem_ctl *mc = ld->mc;
 	unsigned long flags;
-
-	/* Disable debug Snapshot */
-	mif_set_snapshot(false);
 
 	spin_lock_irqsave(&mld->state_lock, flags);
 	mld->state = LINK_STATE_CP_CRASH;

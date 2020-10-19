@@ -364,7 +364,8 @@ static int vxlan_fdb_info(struct sk_buff *skb, struct vxlan_dev *vxlan,
 	if (nla_put(skb, NDA_CACHEINFO, sizeof(ci), &ci))
 		goto nla_put_failure;
 
-	return nlmsg_end(skb, nlh);
+	nlmsg_end(skb, nlh);
+	return 0;
 
 nla_put_failure:
 	nlmsg_cancel(skb, nlh);
@@ -944,24 +945,28 @@ static int vxlan_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb,
 		struct vxlan_fdb *f;
 		int err;
 
+		rcu_read_lock();
 		hlist_for_each_entry_rcu(f, &vxlan->fdb_head[h], hlist) {
 			struct vxlan_rdst *rd;
 
-			if (idx < cb->args[0])
-				goto skip;
-
 			list_for_each_entry_rcu(rd, &f->remotes, list) {
+				if (idx < cb->args[0])
+					goto skip;
+
 				err = vxlan_fdb_info(skb, vxlan, f,
 						     NETLINK_CB(cb->skb).portid,
 						     cb->nlh->nlmsg_seq,
 						     RTM_NEWNEIGH,
 						     NLM_F_MULTI, rd);
-				if (err < 0)
+				if (err < 0) {
+					rcu_read_unlock();
 					goto out;
-			}
+				}
 skip:
-			++idx;
+				++idx;
+			}
 		}
+		rcu_read_unlock();
 	}
 out:
 	return idx;
@@ -1071,7 +1076,6 @@ EXPORT_SYMBOL_GPL(vxlan_sock_release);
 
 /* Callback to update multicast group membership when first VNI on
  * multicast asddress is brought up
- * Done as workqueue because ip_mc_join_group acquires RTNL.
  */
 static void vxlan_igmp_join(struct work_struct *work)
 {
@@ -1081,6 +1085,7 @@ static void vxlan_igmp_join(struct work_struct *work)
 	union vxlan_addr *ip = &vxlan->default_dst.remote_ip;
 	int ifindex = vxlan->default_dst.remote_ifindex;
 
+	rtnl_lock();
 	lock_sock(sk);
 	if (ip->sa.sa_family == AF_INET) {
 		struct ip_mreqn mreq = {
@@ -1096,6 +1101,7 @@ static void vxlan_igmp_join(struct work_struct *work)
 #endif
 	}
 	release_sock(sk);
+	rtnl_unlock();
 
 	vxlan_sock_release(vs);
 	dev_put(vxlan->dev);
@@ -1110,6 +1116,7 @@ static void vxlan_igmp_leave(struct work_struct *work)
 	union vxlan_addr *ip = &vxlan->default_dst.remote_ip;
 	int ifindex = vxlan->default_dst.remote_ifindex;
 
+	rtnl_lock();
 	lock_sock(sk);
 	if (ip->sa.sa_family == AF_INET) {
 		struct ip_mreqn mreq = {
@@ -1126,6 +1133,7 @@ static void vxlan_igmp_leave(struct work_struct *work)
 	}
 
 	release_sock(sk);
+	rtnl_unlock();
 
 	vxlan_sock_release(vs);
 	dev_put(vxlan->dev);
@@ -1377,6 +1385,10 @@ static struct sk_buff *vxlan_na_create(struct sk_buff *request,
 	daddr = eth_hdr(request)->h_source;
 	ns_olen = request->len - skb_transport_offset(request) - sizeof(*ns);
 	for (i = 0; i < ns_olen-1; i += (ns->opt[i+1]<<3)) {
+		if (!ns->opt[i + 1]) {
+			kfree_skb(reply);
+			return NULL;
+		}
 		if (ns->opt[i] == ND_OPT_SOURCE_LL_ADDR) {
 			daddr = ns->opt + i + sizeof(struct nd_opt_hdr);
 			break;

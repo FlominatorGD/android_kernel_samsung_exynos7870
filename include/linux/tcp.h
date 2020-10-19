@@ -61,8 +61,13 @@ static inline unsigned int tcp_optlen(const struct sk_buff *skb)
 
 /* TCP Fast Open Cookie as stored in memory */
 struct tcp_fastopen_cookie {
+	union {
+		u8	val[TCP_FASTOPEN_COOKIE_MAX];
+#if IS_ENABLED(CONFIG_IPV6)
+		struct in6_addr addr;
+#endif
+	};
 	s8	len;
-	u8	val[TCP_FASTOPEN_COOKIE_MAX];
 };
 
 /* This defines a selective acknowledgement block. */
@@ -181,7 +186,8 @@ struct tcp_sock {
 	u32	rcv_ssthresh;	/* Current window clamp			*/
 
 	u16	advmss;		/* Advertised MSS			*/
-	u8	unused;
+	u8	tlp_retrans:1,	/* TLP is a retransmission */
+		unused_1:7;
 	u8	nonagle     : 4,/* Disable Nagle algorithm?             */
 		thin_lto    : 1,/* Use linear timeouts for thin streams */
 		thin_dupack : 1,/* Fast retransmit on first dupack      */
@@ -193,7 +199,7 @@ struct tcp_sock {
 		syn_fastopen:1,	/* SYN includes Fast Open option */
 		syn_data_acked:1,/* data in SYN is acked by SYN-ACK */
 		is_cwnd_limited:1;/* forward progress limited by snd_cwnd? */
-	u32	tlp_high_seq;	/* snd_nxt at the time of TLP retransmit. */
+	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
 
 /* RTT measurement */
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
@@ -283,19 +289,6 @@ struct tcp_sock {
 
 	int			linger2;
 
-/* Network Pacemaker */
-#ifdef CONFIG_NETPM
-	u8 netpm_netif;
-	u8 netpm_rbuf_flag;
-	u32 netpm_rtt_min;
-	u32 netpm_srtt;
-	u32 netpm_rttvar;
-	int netpm_cwnd_est;
-	int netpm_tcp_rmem_max;
-	int netpm_max_tput;
-	int netpm_rmem_max_curbdp;
-#endif
-
 /* Receiver side RTT estimation */
 	struct {
 		u32	rtt;
@@ -305,7 +298,7 @@ struct tcp_sock {
 
 /* Receiver queue space */
 	struct {
-		int	space;
+		u32	space;
 		u32	seq;
 		u32	time;
 	} rcvq_space;
@@ -395,5 +388,8 @@ static inline int fastopen_init_queue(struct sock *sk, int backlog)
 	queue->fastopenq->max_qlen = backlog;
 	return 0;
 }
+
+int tcp_skb_shift(struct sk_buff *to, struct sk_buff *from, int pcount,
+		  int shiftlen);
 
 #endif	/* _LINUX_TCP_H */

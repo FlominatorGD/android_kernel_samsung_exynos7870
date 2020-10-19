@@ -44,10 +44,10 @@ struct _aarch64_ctx {
 	__u32 size;
 };
 
-typedef struct{
+typedef struct {
 	__u64 a;
 	__u64 b;
-}___uint128_t;
+} ___uint128_t;
 
 #define FPSIMD_MAGIC	0x46508001
 

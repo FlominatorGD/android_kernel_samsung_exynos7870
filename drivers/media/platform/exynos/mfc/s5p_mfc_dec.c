@@ -544,7 +544,7 @@ static int dec_get_buf_update_val(struct s5p_mfc_ctx *ctx,
 	struct s5p_mfc_buf_ctrl *buf_ctrl;
 
 	list_for_each_entry(buf_ctrl, head, list) {
-		if ((buf_ctrl->id == id)) {
+		if (buf_ctrl->id == id) {
 			buf_ctrl->val = value;
 			mfc_debug(5, "++id: 0x%08x val: %d\n",
 					buf_ctrl->id, buf_ctrl->val);
@@ -702,6 +702,19 @@ static int vidioc_g_fmt_vid_cap_mplane(struct file *file, void *priv,
 		   further processing stages should crop to this
 		   rectangle. */
 		s5p_mfc_dec_calc_dpb_size(ctx);
+
+		/* If total memory requirement is too big for this device,
+		 * then it returns error.
+		 * 5: number of extra DPBs
+		 * 3: number of DPBs for Android framework
+		 * 600MB: being used to return an error,
+		 * when 8K resolution video clip is being tried to be decoded
+		 */
+		if ((ctx->raw_buf.total_plane_size * (ctx->dpb_count + 5 + 3)) > (600 * 1024 * 1024)) {
+			mfc_info_ctx("Total memory size is too big. width(%d), height(%d), dpb(%d)\n",
+					ctx->img_width, ctx->img_height, ctx->dpb_count);
+			return -EIO;
+		}
 
 		pix_mp->width = ctx->img_width;
 		pix_mp->height = ctx->img_height;

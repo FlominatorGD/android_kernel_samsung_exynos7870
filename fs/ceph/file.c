@@ -211,7 +211,7 @@ int ceph_open(struct inode *inode, struct file *file)
 
 	req->r_num_caps = 1;
 	if (flags & O_CREAT)
-		parent_inode = ceph_get_dentry_parent_inode(file->f_dentry);
+		parent_inode = ceph_get_dentry_parent_inode(file->f_path.dentry);
 	err = ceph_mdsc_do_request(mdsc, parent_inode, req);
 	iput(parent_inode);
 	if (!err)
@@ -891,7 +891,7 @@ static ssize_t ceph_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	mutex_lock(&inode->i_mutex);
 
 	/* We can write back this queue in page reclaim */
-	current->backing_dev_info = file->f_mapping->backing_dev_info;
+	current->backing_dev_info = inode_to_bdi(inode);
 
 	err = generic_write_checks(file, &pos, &count, S_ISBLK(inode->i_mode));
 	if (err)
@@ -1263,6 +1263,7 @@ const struct file_operations ceph_file_fops = {
 	.mmap = ceph_mmap,
 	.fsync = ceph_fsync,
 	.lock = ceph_lock,
+	.setlease = simple_nosetlease,
 	.flock = ceph_flock,
 	.splice_read = generic_file_splice_read,
 	.splice_write = iter_file_splice_write,

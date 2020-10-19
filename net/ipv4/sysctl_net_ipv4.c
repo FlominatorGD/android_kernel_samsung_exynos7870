@@ -34,6 +34,8 @@ static int tcp_retr1_max = 255;
 static int ip_local_port_range_min[] = { 1, 1 };
 static int ip_local_port_range_max[] = { 65535, 65535 };
 static int tcp_adv_win_scale_min = -31;
+static int tcp_min_snd_mss_min = TCP_MIN_SND_MSS;
+static int tcp_min_snd_mss_max = 65535;
 static int tcp_adv_win_scale_max = 31;
 static int ip_ttl_min = 1;
 static int ip_ttl_max = 255;
@@ -94,11 +96,11 @@ static void inet_get_ping_group_range_table(struct ctl_table *table, kgid_t *low
 		container_of(table->data, struct net, ipv4.ping_group_range.range);
 	unsigned int seq;
 	do {
-		seq = read_seqbegin(&net->ipv4.ip_local_ports.lock);
+		seq = read_seqbegin(&net->ipv4.ping_group_range.lock);
 
 		*low = data[0];
 		*high = data[1];
-	} while (read_seqretry(&net->ipv4.ip_local_ports.lock, seq));
+	} while (read_seqretry(&net->ipv4.ping_group_range.lock, seq));
 }
 
 /* Update system visible IP port range */
@@ -107,10 +109,10 @@ static void set_ping_group_range(struct ctl_table *table, kgid_t low, kgid_t hig
 	kgid_t *data = table->data;
 	struct net *net =
 		container_of(table->data, struct net, ipv4.ping_group_range.range);
-	write_seqlock_bh(&net->ipv4.ip_local_ports.lock);
+	write_seqlock(&net->ipv4.ping_group_range.lock);
 	data[0] = low;
 	data[1] = high;
-	write_sequnlock_bh(&net->ipv4.ip_local_ports.lock);
+	write_sequnlock(&net->ipv4.ping_group_range.lock);
 }
 
 /* Validate changes from /proc interface. */
@@ -274,93 +276,6 @@ bad_key:
 	kfree(tbl.data);
 	return ret;
 }
-
-#ifdef CONFIG_NETPM
-#define TCP_NETPM_IFNAME_MAX	23
-#define TCP_NETPM_IFDEVS_MAX	64
-
-static int proc_netpm_ifdevs(struct ctl_table *ctl, int write,
-			     void __user *buffer, size_t *lenp,
-			     loff_t *ppos)
-{
-	size_t offs = 0;
-	char ifname[TCP_NETPM_IFNAME_MAX + 1];
-	char *strbuf = NULL;
-	struct net_device *dev;
-	struct ctl_table tbl = { .maxlen = ((TCP_NETPM_IFNAME_MAX + 1) * TCP_NETPM_IFDEVS_MAX) };
-	int ret = 0;
-
-	if (!write) {
-		char *dev_list;
-		int len = tbl.maxlen, used;
-
-		tbl.data = kzalloc(tbl.maxlen, GFP_KERNEL);
-		if (!tbl.data)
-			return -ENOMEM;
-		dev_list = (char *)tbl.data;
-
-		rcu_read_lock();
-		for_each_netdev_rcu(&init_net, dev) {
-			if (dev && dev->netpm_use) {
-				used = snprintf(dev_list, len, "%s ", dev->name);
-				dev_list += used;
-				len -= used;
-			}
-		}
-		rcu_read_unlock();
-
-		ret = proc_dostring(&tbl, write, buffer, lenp, ppos);
-
-		kfree(tbl.data);
-		return ret;
-	}
-
-	if (*lenp > tbl.maxlen || *lenp < 1) {
-		pr_info("%s: netpm: lenp=%lu\n", __func__, *lenp);
-		return -EINVAL;
-	}
-
-	strbuf = kzalloc(*lenp + 1, GFP_USER);
-	if (!strbuf)
-		return -ENOMEM;
-
-	if (copy_from_user(strbuf, buffer, *lenp)) {
-		kfree(strbuf);
-		return -EFAULT;
-	}
-
-	/* clear netpm use */
-	rcu_read_lock();
-	for_each_netdev_rcu(&init_net, dev) {
-		if (dev)
-			dev->netpm_use = 0;
-	}
-	rcu_read_unlock();
-
-	while (offs < *lenp && sscanf(strbuf + offs, "%23s", ifname) > 0) {
-		struct net_device *dev;
-		int len = strlen(ifname);
-
-		if (!len)
-			break;
-
-		rcu_read_lock();
-		dev = dev_get_by_name_rcu(&init_net, ifname);
-		if (dev) {
-			dev->netpm_use = 1;
-			pr_info("%s: netpm: ifdev %s added\n", __func__, ifname);
-		}
-		rcu_read_unlock();
-
-		offs += len;
-		while (offs < *lenp && ((char *)strbuf)[offs] == ' ')
-			offs++;
-	}
-
-	kfree(strbuf);
-	return 0;
-}
-#endif
 
 static struct ctl_table ipv4_table[] = {
 	{
@@ -726,6 +641,15 @@ static struct ctl_table ipv4_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
+		.procname	= "tcp_min_snd_mss",
+		.data		= &sysctl_tcp_min_snd_mss,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &tcp_min_snd_mss_min,
+		.extra2		= &tcp_min_snd_mss_max,
+	},
+	{
 		.procname	= "tcp_workaround_signed_windows",
 		.data		= &sysctl_tcp_workaround_signed_windows,
 		.maxlen		= sizeof(int),
@@ -753,21 +677,6 @@ static struct ctl_table ipv4_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
-#ifdef CONFIG_NETPM
-	{
-		.procname	= "tcp_netpm",
-		.data		= &sysctl_tcp_netpm,
-		.maxlen		= sizeof(sysctl_tcp_netpm),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec
-	},
-	{
-		.procname	= "tcp_netpm_ifdevs",
-		.maxlen		= ((TCP_NETPM_IFNAME_MAX + 1) * TCP_NETPM_IFDEVS_MAX),
-		.mode		= 0644,
-		.proc_handler	= proc_netpm_ifdevs
-	},
-#endif
 #ifdef CONFIG_NETLABEL
 	{
 		.procname	= "cipso_cache_enable",
@@ -1037,7 +946,7 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 		int i;
 
 		table = kmemdup(table, sizeof(ipv4_net_table), GFP_KERNEL);
-		if (table == NULL)
+		if (!table)
 			goto err_alloc;
 
 		/* Update the variables to point into the current struct net */
@@ -1046,7 +955,7 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 	}
 
 	net->ipv4.ipv4_hdr = register_net_sysctl(net, "net/ipv4", table);
-	if (net->ipv4.ipv4_hdr == NULL)
+	if (!net->ipv4.ipv4_hdr)
 		goto err_reg;
 
 	net->ipv4.sysctl_local_reserved_ports = kzalloc(65536 / 8, GFP_KERNEL);
@@ -1084,7 +993,7 @@ static __init int sysctl_ipv4_init(void)
 	struct ctl_table_header *hdr;
 
 	hdr = register_net_sysctl(&init_net, "net/ipv4", ipv4_table);
-	if (hdr == NULL)
+	if (!hdr)
 		return -ENOMEM;
 
 	if (register_pernet_subsys(&ipv4_sysctl_ops)) {

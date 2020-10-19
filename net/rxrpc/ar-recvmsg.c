@@ -78,7 +78,7 @@ int rxrpc_recvmsg(struct kiocb *iocb, struct socket *sock,
 				release_sock(&rx->sk);
 				if (continue_call)
 					rxrpc_put_call(continue_call);
-				return -ENODATA;
+				return -EAGAIN;
 			}
 		}
 
@@ -180,7 +180,7 @@ int rxrpc_recvmsg(struct kiocb *iocb, struct socket *sock,
 		if (copy > len - copied)
 			copy = len - copied;
 
-		ret = skb_copy_datagram_iovec(skb, offset, msg->msg_iov, copy);
+		ret = skb_copy_datagram_msg(skb, offset, msg, copy);
 
 		if (ret < 0)
 			goto copy_error;

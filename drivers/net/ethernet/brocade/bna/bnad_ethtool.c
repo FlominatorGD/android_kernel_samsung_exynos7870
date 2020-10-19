@@ -30,7 +30,7 @@
 #define BNAD_NUM_TXF_COUNTERS 12
 #define BNAD_NUM_RXF_COUNTERS 10
 #define BNAD_NUM_CQ_COUNTERS (3 + 5)
-#define BNAD_NUM_RXQ_COUNTERS 6
+#define BNAD_NUM_RXQ_COUNTERS 7
 #define BNAD_NUM_TXQ_COUNTERS 5
 
 #define BNAD_ETHTOOL_STATS_NUM						\
@@ -89,6 +89,7 @@ static const char *bnad_net_stats_strings[BNAD_ETHTOOL_STATS_NUM] = {
 	"tx_skb_headlen_zero",
 	"tx_skb_frag_zero",
 	"tx_skb_len_mismatch",
+	"tx_skb_map_failed",
 	"hw_stats_updates",
 	"netif_rx_dropped",
 
@@ -101,6 +102,7 @@ static const char *bnad_net_stats_strings[BNAD_ETHTOOL_STATS_NUM] = {
 	"tx_unmap_q_alloc_failed",
 	"rx_unmap_q_alloc_failed",
 	"rxbuf_alloc_failed",
+	"rxbuf_map_failed",
 
 	"mac_stats_clr_cnt",
 	"mac_frame_64",
@@ -655,6 +657,8 @@ bnad_get_strings(struct net_device *netdev, u32 stringset, u8 *string)
 				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_allocbuf_failed", q_num);
 				string += ETH_GSTRING_LEN;
+				sprintf(string, "rxq%d_mapbuf_failed", q_num);
+				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_producer_index", q_num);
 				string += ETH_GSTRING_LEN;
 				sprintf(string, "rxq%d_consumer_index", q_num);
@@ -674,6 +678,9 @@ bnad_get_strings(struct net_device *netdev, u32 stringset, u8 *string)
 					string += ETH_GSTRING_LEN;
 					sprintf(string, "rxq%d_allocbuf_failed",
 								q_num);
+					string += ETH_GSTRING_LEN;
+					sprintf(string, "rxq%d_mapbuf_failed",
+						q_num);
 					string += ETH_GSTRING_LEN;
 					sprintf(string, "rxq%d_producer_index",
 								q_num);
@@ -806,6 +813,7 @@ bnad_per_q_stats_fill(struct bnad *bnad, u64 *buf, int bi)
 							rx_packets_with_error;
 					buf[bi++] = rcb->rxq->
 							rxbuf_alloc_failed;
+					buf[bi++] = rcb->rxq->rxbuf_map_failed;
 					buf[bi++] = rcb->producer_index;
 					buf[bi++] = rcb->consumer_index;
 				}
@@ -820,6 +828,7 @@ bnad_per_q_stats_fill(struct bnad *bnad, u64 *buf, int bi)
 							rx_packets_with_error;
 					buf[bi++] = rcb->rxq->
 							rxbuf_alloc_failed;
+					buf[bi++] = rcb->rxq->rxbuf_map_failed;
 					buf[bi++] = rcb->producer_index;
 					buf[bi++] = rcb->consumer_index;
 				}

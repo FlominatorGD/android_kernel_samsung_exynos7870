@@ -412,7 +412,6 @@ static int dm_blk_open(struct block_device *bdev, fmode_t mode)
 
 	dm_get(md);
 	atomic_inc(&md->open_count);
-
 out:
 	spin_unlock(&_minor_lock);
 
@@ -421,16 +420,20 @@ out:
 
 static void dm_blk_close(struct gendisk *disk, fmode_t mode)
 {
-	struct mapped_device *md = disk->private_data;
+	struct mapped_device *md;
 
 	spin_lock(&_minor_lock);
+
+	md = disk->private_data;
+	if (WARN_ON(!md))
+		goto out;
 
 	if (atomic_dec_and_test(&md->open_count) &&
 	    (test_bit(DMF_DEFERRED_REMOVE, &md->flags)))
 		queue_work(deferred_remove_workqueue, &deferred_remove_work);
 
 	dm_put(md);
-
+out:
 	spin_unlock(&_minor_lock);
 }
 
@@ -1964,7 +1967,7 @@ requeued:
 	spin_lock(q->queue_lock);
 
 delay_and_out:
-	blk_delay_queue(q, HZ / 10);
+	blk_delay_queue(q, 10);
 out:
 	dm_put_live_table(md, srcu_idx);
 }
@@ -2005,7 +2008,7 @@ static int dm_any_congested(void *congested_data, int bdi_bits)
 			 * the query about congestion status of request_queue
 			 */
 			if (dm_request_based(md))
-				r = md->queue->backing_dev_info.state &
+				r = md->queue->backing_dev_info.wb.state &
 				    bdi_bits;
 			else
 				r = dm_table_any_congested(map, bdi_bits);
@@ -2206,25 +2209,27 @@ static void free_dev(struct mapped_device *md)
 	int minor = MINOR(disk_devt(md->disk));
 
 	unlock_fs(md);
-	bdput(md->bdev);
 	destroy_workqueue(md->wq);
 	if (md->io_pool)
 		mempool_destroy(md->io_pool);
 	if (md->bs)
 		bioset_free(md->bs);
-	blk_integrity_unregister(md->disk);
-	del_gendisk(md->disk);
+
 	cleanup_srcu_struct(&md->io_barrier);
 	free_table_devices(&md->table_devices);
-	free_minor(minor);
+	dm_stats_cleanup(&md->stats);
 
 	spin_lock(&_minor_lock);
 	md->disk->private_data = NULL;
 	spin_unlock(&_minor_lock);
-
+	if (blk_get_integrity(md->disk))
+		blk_integrity_unregister(md->disk);
+	del_gendisk(md->disk);
 	put_disk(md->disk);
 	blk_cleanup_queue(md->queue);
-	dm_stats_cleanup(&md->stats);
+	bdput(md->bdev);
+	free_minor(minor);
+
 	module_put(THIS_MODULE);
 	kfree(md);
 }
@@ -2583,6 +2588,7 @@ EXPORT_SYMBOL_GPL(dm_device_name);
 
 static void __dm_destroy(struct mapped_device *md, bool wait)
 {
+	struct request_queue *q = dm_get_md_queue(md);
 	struct dm_table *map;
 	int srcu_idx;
 
@@ -2592,6 +2598,10 @@ static void __dm_destroy(struct mapped_device *md, bool wait)
 	idr_replace(&_minor_idr, MINOR_ALLOCED, MINOR(disk_devt(dm_disk(md))));
 	set_bit(DMF_FREEING, &md->flags);
 	spin_unlock(&_minor_lock);
+
+	spin_lock_irq(q->queue_lock);
+	queue_flag_set(QUEUE_FLAG_DYING, q);
+	spin_unlock_irq(q->queue_lock);
 
 	/*
 	 * Take suspend_lock so that presuspend and postsuspend methods

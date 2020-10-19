@@ -1165,6 +1165,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			When zero, profiling data is discarded and associated
 			debugfs files are removed at module unload time.
 
+	goldfish	[X86] Enable the goldfish android emulator platform.
+			Don't use this when you are not running on the
+			android emulator
+
 	gpt		[EFI] Forces disk with valid GPT signature but
 			invalid Protective MBR to be treated as GPT. If the
 			primary GPT is corrupted, it enables the backup/alternate
@@ -3401,6 +3405,13 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			server. Increasing these values may allow you to
 			improve throughput, but will also increase the
 			amount of memory reserved for use by the client.
+
+	suspend.pm_test_delay=
+			[SUSPEND]
+			Sets the number of seconds to remain in a suspend test
+			mode before resuming the system (see
+			/sys/power/pm_test). Only available when CONFIG_PM_DEBUG
+			is set. Default value is 5.
 
 	swapaccount=[0|1]
 			[KNL] Enable accounting of swap in memory resource

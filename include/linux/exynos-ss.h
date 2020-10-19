@@ -27,26 +27,12 @@ extern void exynos_ss_irq(int irq, void *fn, unsigned int val, int en);
 extern int exynos_ss_try_enable(const char *name, unsigned long long duration);
 extern int exynos_ss_set_enable(const char *name, int en);
 extern int exynos_ss_get_enable(const char *name, bool init);
-extern int exynos_ss_save_context(void *regs);
 extern int exynos_ss_save_reg(void *regs);
-extern int exynos_ss_dump_panic(char *str, size_t len);
-extern int exynos_ss_prepare_panic(void);
-extern int exynos_ss_post_panic(void);
 extern int exynos_ss_post_reboot(void);
-extern int exynos_ss_set_hardlockup(int);
-extern int exynos_ss_get_hardlockup(void);
 extern unsigned int exynos_ss_get_item_size(char *);
 extern unsigned int exynos_ss_get_item_paddr(char *);
-extern void exynos_ss_panic_handler_safe(struct pt_regs *regs);
 #ifdef CONFIG_EXYNOS_DRAMTEST
 extern int disable_mc_powerdn(void);
-#endif
-
-/* option */
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-extern void exynos_ss_regulator(char* f_name, unsigned int addr, unsigned int volt, int en);
-#else
-#define exynos_ss_regulator(a,b,c,d)         do { } while(0)
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
@@ -81,12 +67,6 @@ extern void exynos_ss_irqs_disabled(unsigned long flags);
 extern void exynos_ss_hrtimer(void *timer, s64 *now, void *fn, int en);
 #else
 #define exynos_ss_hrtimer(a,b,c,d)	do { } while(0);
-#endif
-
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-extern void exynos_ss_reg(unsigned int read, size_t val, size_t reg, int en);
-#else
-#define exynos_ss_reg(a,b,c,d)		do { } while(0);
 #endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_SPINLOCK
@@ -143,7 +123,6 @@ extern void exynos_ss_i2c_clk(struct clk *clk, int bus_id, int en);
 #define exynos_ss_clockevent(a,b,c)	do { } while(0)
 #define exynos_ss_cpuidle(a,b,c,d)	do { } while(0)
 #define exynos_ss_suspend(a,b,c)	do { } while(0)
-#define exynos_ss_regulator(a,b,c,d)	do { } while(0)
 #define exynos_ss_thermal(a,b,c,d)	do { } while(0)
 #define exynos_ss_mailbox(a,b,c,d)	do { } while(0)
 #define exynos_ss_irq(a,b,c,d)		do { } while(0)
@@ -153,26 +132,19 @@ extern void exynos_ss_i2c_clk(struct clk *clk, int bus_id, int en);
 #define exynos_ss_clk(a,b,c)		do { } while(0)
 #define exynos_ss_freq(a,b,c,d)		do { } while(0)
 #define exynos_ss_irq_exit_var(v)	do { v = 0; } while(0)
-#define exynos_ss_reg(a,b,c,d)		do { } while(0)
 #define exynos_ss_hrtimer(a,b,c,d)	do { } while(0)
 #define exynos_ss_hook_pmsg(a,b)	do { } while(0)
 #define exynos_ss_printk(...)		do { } while(0)
 #define exynos_ss_printkl(a,b)		do { } while(0)
-#define exynos_ss_save_context(a)	do { } while(0)
 #define exynos_ss_try_enable(a,b)	do { } while(0)
 #define exynos_ss_set_enable(a,b)	do { } while(0)
 #define exynos_ss_get_enable(a)		do { } while(0)
-#define exynos_ss_dump_panic(a,b)	do { } while(0)
 #define exynos_ss_dump_sfr()		do { } while(0)
-#define exynos_ss_prepare_panic()	do { } while(0)
-#define exynos_ss_post_panic()		do { } while(0)
 #define exynos_ss_post_reboot()		do { } while(0)
-#define exynos_ss_set_hardlockup(a)	do { } while(0)
-#define exynos_ss_get_hardlockup()	do { } while(0)
 #define exynos_ss_get_item_size(a)	do { } while(0)
 #define exynos_ss_get_item_paddr(a)	do { } while(0)
 #define exynos_ss_check_crash_key(a, b)	do { } while (0)
-#define exynos_ss_i2c_clk(a, b)		do { } while (0)
+#define exynos_ss_i2c_clk(a, b, c)	do { } while (0)
 #endif /* CONFIG_EXYNOS_SNAPSHOT */
 
 /**

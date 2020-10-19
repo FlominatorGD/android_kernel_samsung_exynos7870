@@ -62,19 +62,9 @@ struct wb_writeback_work {
  */
 int writeback_in_progress(struct backing_dev_info *bdi)
 {
-	return test_bit(BDI_writeback_running, &bdi->state);
+	return test_bit(WB_writeback_running, &bdi->wb.state);
 }
 EXPORT_SYMBOL(writeback_in_progress);
-
-static inline struct backing_dev_info *inode_to_bdi(struct inode *inode)
-{
-	struct super_block *sb = inode->i_sb;
-
-	if (sb_is_blkdev_sb(sb))
-		return inode->i_mapping->backing_dev_info;
-
-	return sb->s_bdi;
-}
 
 static inline struct inode *wb_inode(struct list_head *head)
 {
@@ -94,7 +84,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(wbc_writepage);
 static void bdi_wakeup_thread(struct backing_dev_info *bdi)
 {
 	spin_lock_bh(&bdi->wb_lock);
-	if (test_bit(BDI_registered, &bdi->state))
+	if (test_bit(WB_registered, &bdi->wb.state))
 		mod_delayed_work(bdi_wq, &bdi->wb.dwork, 0);
 	spin_unlock_bh(&bdi->wb_lock);
 }
@@ -105,7 +95,7 @@ static void bdi_queue_work(struct backing_dev_info *bdi,
 	trace_writeback_queue(bdi, work);
 
 	spin_lock_bh(&bdi->wb_lock);
-	if (!test_bit(BDI_registered, &bdi->state)) {
+	if (!test_bit(WB_registered, &bdi->wb.state)) {
 		if (work->done)
 			complete(work->done);
 		goto out_unlock;
@@ -1048,7 +1038,7 @@ static long wb_do_writeback(struct bdi_writeback *wb)
 	struct wb_writeback_work *work;
 	long wrote = 0;
 
-	set_bit(BDI_writeback_running, &wb->bdi->state);
+	set_bit(WB_writeback_running, &wb->state);
 	while ((work = get_next_work_item(bdi)) != NULL) {
 
 		trace_writeback_exec(bdi, work);
@@ -1070,7 +1060,7 @@ static long wb_do_writeback(struct bdi_writeback *wb)
 	 */
 	wrote += wb_check_old_data_flush(wb);
 	wrote += wb_check_background_flush(wb);
-	clear_bit(BDI_writeback_running, &wb->bdi->state);
+	clear_bit(WB_writeback_running, &wb->state);
 
 	return wrote;
 }
@@ -1090,7 +1080,7 @@ void bdi_writeback_workfn(struct work_struct *work)
 	current->flags |= PF_SWAPWRITE;
 
 	if (likely(!current_is_workqueue_rescuer() ||
-		   !test_bit(BDI_registered, &bdi->state))) {
+		   !test_bit(WB_registered, &wb->state))) {
 		/*
 		 * The normal path.  Keep writing back @bdi until its
 		 * work_list is empty.  Note that this path is also taken
@@ -1264,7 +1254,7 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 			spin_unlock(&inode->i_lock);
 			spin_lock(&bdi->wb.list_lock);
 			if (bdi_cap_writeback_dirty(bdi)) {
-				WARN(!test_bit(BDI_registered, &bdi->state),
+				WARN(!test_bit(WB_registered, &bdi->wb.state),
 				     "bdi-%s not registered\n", bdi->name);
 
 				/*

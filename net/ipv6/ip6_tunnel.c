@@ -64,12 +64,6 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS_RTNL_LINK("ip6tnl");
 MODULE_ALIAS_NETDEV("ip6tnl0");
 
-#ifdef IP6_TNL_DEBUG
-#define IP6_TNL_TRACE(x...) pr_debug("%s:" x "\n", __func__)
-#else
-#define IP6_TNL_TRACE(x...) do {;} while(0)
-#endif
-
 #define HASH_SIZE_SHIFT  5
 #define HASH_SIZE (1 << HASH_SIZE_SHIFT)
 
@@ -137,7 +131,7 @@ struct dst_entry *ip6_tnl_dst_check(struct ip6_tnl *t)
 	struct dst_entry *dst = t->dst_cache;
 
 	if (dst && dst->obsolete &&
-	    dst->ops->check(dst, t->dst_cookie) == NULL) {
+	    !dst->ops->check(dst, t->dst_cookie)) {
 		t->dst_cache = NULL;
 		dst_release(dst);
 		return NULL;
@@ -317,7 +311,7 @@ static struct ip6_tnl *ip6_tnl_create(struct net *net, struct __ip6_tnl_parm *p)
 
 	dev = alloc_netdev(sizeof(*t), name, NET_NAME_UNKNOWN,
 			   ip6_tnl_dev_setup);
-	if (dev == NULL)
+	if (!dev)
 		goto failed;
 
 	dev_net_set(dev, net);
@@ -496,8 +490,8 @@ ip6_tnl_err(struct sk_buff *skb, __u8 ipproto, struct inet6_skb_parm *opt,
 	   processing of the error. */
 
 	rcu_read_lock();
-	if ((t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->daddr,
-					&ipv6h->saddr)) == NULL)
+	t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->daddr, &ipv6h->saddr);
+	if (!t)
 		goto out;
 
 	if (t->parms.proto != ipproto && t->parms.proto != 0)
@@ -544,7 +538,8 @@ ip6_tnl_err(struct sk_buff *skb, __u8 ipproto, struct inet6_skb_parm *opt,
 			mtu = IPV6_MIN_MTU;
 		t->dev->mtu = mtu;
 
-		if ((len = sizeof(*ipv6h) + ntohs(ipv6h->payload_len)) > mtu) {
+		len = sizeof(*ipv6h) + ntohs(ipv6h->payload_len);
+		if (len > mtu) {
 			rel_type = ICMPV6_PKT_TOOBIG;
 			rel_code = 0;
 			rel_info = mtu;
@@ -804,9 +799,8 @@ static int ip6_tnl_rcv(struct sk_buff *skb, __u16 protocol,
 	int err;
 
 	rcu_read_lock();
-
-	if ((t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->saddr,
-					&ipv6h->daddr)) != NULL) {
+	t = ip6_tnl_lookup(dev_net(skb->dev), &ipv6h->saddr, &ipv6h->daddr);
+	if (t) {
 		struct pcpu_sw_netstats *tstats;
 
 		if (t->parms.proto != ipproto && t->parms.proto != 0) {
@@ -1031,7 +1025,8 @@ static int ip6_tnl_xmit2(struct sk_buff *skb,
 	    (skb_cloned(skb) && !skb_clone_writable(skb, 0))) {
 		struct sk_buff *new_skb;
 
-		if (!(new_skb = skb_realloc_headroom(skb, max_headroom)))
+		new_skb = skb_realloc_headroom(skb, max_headroom);
+		if (!new_skb)
 			goto tx_err_dst_release;
 
 		if (skb->sk)
@@ -1093,6 +1088,8 @@ ip4ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* ensure we can access the full inner ip header */
 	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 		return -1;
+
+	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 
 	iph = ip_hdr(skb);
 
@@ -1251,7 +1248,7 @@ static void ip6_tnl_link_config(struct ip6_tnl *t)
 						 &p->raddr, &p->laddr,
 						 p->link, strict);
 
-		if (rt == NULL)
+		if (!rt)
 			return;
 
 		if (rt->dst.dev) {
@@ -1772,7 +1769,7 @@ static void __net_exit ip6_tnl_destroy_tunnels(struct net *net)
 
 	for (h = 0; h < HASH_SIZE; h++) {
 		t = rtnl_dereference(ip6n->tnls_r_l[h]);
-		while (t != NULL) {
+		while (t) {
 			/* If dev is in the same netns, it has already
 			 * been added to the list by the previous loop.
 			 */

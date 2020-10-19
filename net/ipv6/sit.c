@@ -118,7 +118,7 @@ static struct ip_tunnel *ipip6_tunnel_lookup(struct net *net,
 			return t;
 	}
 	t = rcu_dereference(sitn->tunnels_wc[0]);
-	if ((t != NULL) && (t->dev->flags & IFF_UP))
+	if (t && (t->dev->flags & IFF_UP))
 		return t;
 	return NULL;
 }
@@ -253,7 +253,7 @@ static struct ip_tunnel *ipip6_tunnel_locate(struct net *net,
 	}
 	dev = alloc_netdev(sizeof(*t), name, NET_NAME_UNKNOWN,
 			   ipip6_tunnel_setup);
-	if (dev == NULL)
+	if (!dev)
 		return NULL;
 
 	dev_net_set(dev, net);
@@ -557,18 +557,18 @@ static int ipip6_err(struct sk_buff *skb, u32 info)
 				skb->dev,
 				iph->daddr,
 				iph->saddr);
-	if (t == NULL)
+	if (!t)
 		goto out;
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED) {
 		ipv4_update_pmtu(skb, dev_net(skb->dev), info,
-				 t->parms.link, 0, IPPROTO_IPV6, 0);
+				 t->parms.link, 0, iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
 	if (type == ICMP_REDIRECT) {
 		ipv4_redirect(skb, dev_net(skb->dev), t->parms.link, 0,
-			      IPPROTO_IPV6, 0);
+			      iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
@@ -673,7 +673,7 @@ static int ipip6_rcv(struct sk_buff *skb)
 
 	tunnel = ipip6_tunnel_lookup(dev_net(skb->dev), skb->dev,
 				     iph->saddr, iph->daddr);
-	if (tunnel != NULL) {
+	if (tunnel) {
 		struct pcpu_sw_netstats *tstats;
 
 		if (tunnel->parms.iph.protocol != IPPROTO_IPV6 &&
@@ -735,7 +735,7 @@ static int ipip_rcv(struct sk_buff *skb)
 	iph = ip_hdr(skb);
 	tunnel = ipip6_tunnel_lookup(dev_net(skb->dev), skb->dev,
 				     iph->saddr, iph->daddr);
-	if (tunnel != NULL) {
+	if (tunnel) {
 		if (tunnel->parms.iph.protocol != IPPROTO_IPIP &&
 		    tunnel->parms.iph.protocol != 0)
 			goto drop;
@@ -841,7 +841,7 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		if (skb_dst(skb))
 			neigh = dst_neigh_lookup(skb_dst(skb), &iph6->daddr);
 
-		if (neigh == NULL) {
+		if (!neigh) {
 			net_dbg_ratelimited("nexthop == NULL\n");
 			goto tx_error;
 		}
@@ -870,7 +870,7 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		if (skb_dst(skb))
 			neigh = dst_neigh_lookup(skb_dst(skb), &iph6->daddr);
 
-		if (neigh == NULL) {
+		if (!neigh) {
 			net_dbg_ratelimited("nexthop == NULL\n");
 			goto tx_error;
 		}
@@ -1162,7 +1162,7 @@ ipip6_tunnel_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				break;
 			}
 			t = ipip6_tunnel_locate(net, &p, 0);
-			if (t == NULL)
+			if (!t)
 				t = netdev_priv(dev);
 		}
 
@@ -1210,7 +1210,7 @@ ipip6_tunnel_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		t = ipip6_tunnel_locate(net, &p, cmd == SIOCADDTUNNEL);
 
 		if (dev != sitn->fb_tunnel_dev && cmd == SIOCCHGTUNNEL) {
-			if (t != NULL) {
+			if (t) {
 				if (t->dev != dev) {
 					err = -EEXIST;
 					break;
@@ -1245,7 +1245,8 @@ ipip6_tunnel_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 			if (copy_from_user(&p, ifr->ifr_ifru.ifru_data, sizeof(p)))
 				goto done;
 			err = -ENOENT;
-			if ((t = ipip6_tunnel_locate(net, &p, 0)) == NULL)
+			t = ipip6_tunnel_locate(net, &p, 0);
+			if (!t)
 				goto done;
 			err = -EPERM;
 			if (t == netdev_priv(sitn->fb_tunnel_dev))
@@ -1791,7 +1792,7 @@ static void __net_exit sit_destroy_tunnels(struct net *net,
 			struct ip_tunnel *t;
 
 			t = rtnl_dereference(sitn->tunnels[prio][h]);
-			while (t != NULL) {
+			while (t) {
 				/* If dev is in the same netns, it has already
 				 * been added to the list by the previous loop.
 				 */
@@ -1829,7 +1830,8 @@ static int __net_init sit_init_net(struct net *net)
 	 */
 	sitn->fb_tunnel_dev->features |= NETIF_F_NETNS_LOCAL;
 
-	if ((err = register_netdev(sitn->fb_tunnel_dev)))
+	err = register_netdev(sitn->fb_tunnel_dev);
+	if (err)
 		goto err_reg_dev;
 
 	ipip6_tunnel_clone_6rd(sitn->fb_tunnel_dev, sitn);

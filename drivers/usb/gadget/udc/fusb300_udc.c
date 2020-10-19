@@ -1320,8 +1320,7 @@ static int fusb300_udc_start(struct usb_gadget *g,
 	return 0;
 }
 
-static int fusb300_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver)
+static int fusb300_udc_stop(struct usb_gadget *g)
 {
 	struct fusb300 *fusb300 = to_fusb300(g);
 
@@ -1346,12 +1345,15 @@ static const struct usb_gadget_ops fusb300_gadget_ops = {
 static int __exit fusb300_remove(struct platform_device *pdev)
 {
 	struct fusb300 *fusb300 = platform_get_drvdata(pdev);
+	int i;
 
 	usb_del_gadget_udc(&fusb300->gadget);
 	iounmap(fusb300->reg);
 	free_irq(platform_get_irq(pdev, 0), fusb300);
 
 	fusb300_free_request(&fusb300->ep[0]->ep, fusb300->ep0_req);
+	for (i = 0; i < FUSB300_MAX_NUM_EP; i++)
+		kfree(fusb300->ep[i]);
 	kfree(fusb300);
 
 	return 0;
@@ -1484,6 +1486,8 @@ clean_up:
 		if (fusb300->ep0_req)
 			fusb300_free_request(&fusb300->ep[0]->ep,
 				fusb300->ep0_req);
+		for (i = 0; i < FUSB300_MAX_NUM_EP; i++)
+			kfree(fusb300->ep[i]);
 		kfree(fusb300);
 	}
 	if (reg)

@@ -112,7 +112,7 @@ static bool tcp_fastopen_cookie_gen(struct request_sock *req,
 		struct tcp_fastopen_cookie tmp;
 
 		if (__tcp_fastopen_cookie_gen(&ip6h->saddr, &tmp)) {
-			struct in6_addr *buf = (struct in6_addr *) tmp.val;
+			struct in6_addr *buf = &tmp.addr;
 			int i;
 
 			for (i = 0; i < 4; i++)
@@ -139,7 +139,7 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	req->sk = NULL;
 
 	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL);
-	if (child == NULL)
+	if (!child)
 		return false;
 
 	spin_lock(&queue->fastopenq->lock);
@@ -164,6 +164,7 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	 * scaled. So correct it appropriately.
 	 */
 	tp->snd_wnd = ntohs(tcp_hdr(skb)->window);
+	tp->max_window = tp->snd_wnd;
 
 	/* Activate the retrans timer so that SYNACK can be retransmitted.
 	 * The request socket is not added to the SYN table of the parent
@@ -216,7 +217,7 @@ static bool tcp_fastopen_create_child(struct sock *sk,
 	sk->sk_data_ready(sk);
 	bh_unlock_sock(child);
 	sock_put(child);
-	WARN_ON(req->sk == NULL);
+	WARN_ON(!req->sk);
 	return true;
 }
 EXPORT_SYMBOL(tcp_fastopen_create_child);
@@ -236,7 +237,7 @@ static bool tcp_fastopen_queue_check(struct sock *sk)
 	 * temporarily vs a server not supporting Fast Open at all.
 	 */
 	fastopenq = inet_csk(sk)->icsk_accept_queue.fastopenq;
-	if (fastopenq == NULL || fastopenq->max_qlen == 0)
+	if (!fastopenq || fastopenq->max_qlen == 0)
 		return false;
 
 	if (fastopenq->qlen >= fastopenq->max_qlen) {

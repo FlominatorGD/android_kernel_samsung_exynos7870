@@ -148,7 +148,7 @@ alternative_if ARM64_HAS_PAN
 alternative_else_nop_endif
 
 	.if	\el != 0
-	mrs	x21, ttbr1_el1
+	mrs	x21, ttbr0_el1
 	tst	x21, #TTBR_ASID_MASK		// Check for the reserved ASID
 	orr	x23, x23, #PSR_PAN_BIT		// Set the emulated PAN in the saved SPSR
 	b.eq	1f				// TTBR0 access already disabled
@@ -213,6 +213,16 @@ alternative_else_nop_endif
 	.endif
 
 	__uaccess_ttbr0_enable x0, x1
+
+	.if	\el == 0
+	/*
+	 * Enable errata workarounds only if returning to user. The only
+	 * workaround currently required for TTBR0_EL1 changes are for the
+	 * Cavium erratum 27456 (broadcast TLBI instructions may cause I-cache
+	 * corruption).
+	 */
+	bl	post_ttbr_update_workaround
+	.endif
 1:
 	.if	\el != 0
 	and	x22, x22, #~PSR_PAN_BIT		// ARMv8.0 CPUs do not understand this bit
@@ -806,29 +816,6 @@ el0_svc_naked:					// compat entry point
 	b.ne	__sys_trace
 	cmp     scno, sc_nr                     // check upper syscall limit
 	b.hs	ni_sys
-#ifdef CONFIG_SECURITY_DEFEX
-/*
- * Defex enter hook
- */
-
-	ldr	x16, =defex_syscall_catch_enter
-	ldr	x16, [x16]
-	cmp	x16, xzr
-	b.eq	2f
-	mov	x0, scno
-	mov	x1, sp
-	blr	x16
-
-	cbnz	w0, ret_fast_syscall		// block this syscall?
-#	adr	lr, ret_fast_syscall		// return address (not needed here)
-
-	ldp	x0, x1, [sp]			// restore the syscall args
-	ldp	x2, x3, [sp, #S_X2]
-	ldp	x4, x5, [sp, #S_X4]
-	ldp	x6, x7, [sp, #S_X6]
-
-2:
-#endif
 	ldr	x16, [stbl, scno, lsl #3]	// address in the syscall table
 	blr	x16				// call sys_* routine
 	b	ret_fast_syscall
@@ -856,23 +843,6 @@ __sys_trace:
 	mov	x1, sp				// pointer to regs
 	cmp	scno, sc_nr			// check upper syscall limit
 	b.hs	__ni_sys_trace
-#ifdef CONFIG_SECURITY_DEFEX
-/*
- * Defex enter hook
- */
-
-	ldr	x16, =defex_syscall_catch_enter
-	ldr	x16, [x16]
-	cmp	x16, xzr
-	b.eq	3f
-	mov	x0, scno
-	mov	x1, sp
-	blr	x16
-
-	cbnz	w0, __sys_trace_return		// block this syscall?
-#	adr	lr, __sys_trace_return		// return address (not neede here)
-3:
-#endif
 	ldp	x0, x1, [sp]			// restore the syscall args
 	ldp	x2, x3, [sp, #S_X2]
 	ldp	x4, x5, [sp, #S_X4]

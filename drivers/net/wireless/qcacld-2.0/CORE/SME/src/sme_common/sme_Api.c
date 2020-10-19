@@ -12192,6 +12192,7 @@ void sme_UpdateEnableSSR(tHalHandle hHal, tANI_BOOLEAN enableSSR)
  * SME API to stringify bonding mode. (hostapd convention)
  */
 
+#ifdef WLAN_DEBUG
 static const char* sme_CBMode2String( tANI_U32 mode)
 {
    switch (mode)
@@ -12217,6 +12218,7 @@ static const char* sme_CBMode2String( tANI_U32 mode)
          return "Unknown";
    }
 }
+#endif
 
 /*
  * SME API to adjust bonding mode to regulatory, dfs nol .. etc.
@@ -17459,5 +17461,14 @@ eHalStatus sme_set_lost_link_info_cb(tHalHandle hal,
 			  __func__, status);
 	}
 	return status;
+}
+
+uint32_t sme_unpack_rsn_ie(tHalHandle hal, uint8_t *buf,
+			   uint8_t buf_len,
+			   tDot11fIERSN *rsn_ie)
+{
+	tpAniSirGlobal mac_ctx = PMAC_STRUCT(hal);
+
+	return dot11fUnpackIeRSN(mac_ctx, buf, buf_len, rsn_ie);
 }
 

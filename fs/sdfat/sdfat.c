@@ -54,7 +54,9 @@
 #include <linux/vmalloc.h>
 #include <asm/current.h>
 #include <asm/unaligned.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
+#include <linux/iversion.h>
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)
 #include <linux/aio.h>
 #endif
 
@@ -138,6 +140,18 @@ static int __sdfat_cmpi(const struct dentry *dentry, unsigned int len,
 /*************************************************************************
  * FUNCTIONS WHICH HAS KERNEL VERSION DEPENDENCY
  *************************************************************************/
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+static inline void inode_set_iversion(struct inode *inode, u64 val)
+{
+	inode->i_version = val;
+}
+static inline u64 inode_peek_iversion(struct inode *inode)
+{
+	return inode->i_version;
+}
+#endif
+
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
        /* EMPTY */
 #else /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) */
@@ -147,10 +161,6 @@ static inline void bio_set_dev(struct bio *bio, struct block_device *bdev)
 }
 #endif
 
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
-#define CURRENT_TIME_SEC	timespec_trunc(current_kernel_time(), NSEC_PER_SEC)
-#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 static int sdfat_getattr(const struct path *path, struct kstat *stat,
@@ -243,21 +253,6 @@ static inline unsigned int __sdfat_full_name_hash(const struct dentry *unused, c
 static inline unsigned long __sdfat_init_name_hash(const struct dentry *unused)
 {
 	return init_name_hash();
-}
-#endif
-
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 21)
-       /* EMPTY */
-#else /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 21) */
-static inline void inode_lock(struct inode *inode)
-{
-	       mutex_lock(&inode->i_mutex);
-}
-
-static inline void inode_unlock(struct inode *inode)
-{
-	       mutex_unlock(&inode->i_mutex);
 }
 #endif
 
@@ -894,6 +889,15 @@ static int sdfat_file_fsync(struct file *filp, int datasync)
 /*************************************************************************
  * MORE FUNCTIONS WHICH HAS KERNEL VERSION DEPENDENCY
  *************************************************************************/
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+#define CURRENT_TIME_SEC	timespec64_trunc(current_kernel_time64(), NSEC_PER_SEC)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+#define CURRENT_TIME_SEC        timespec_trunc(current_kernel_time(), NSEC_PER_SEC)
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
+       /* EMPTY */
+#endif
+
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
 static void sdfat_writepage_end_io(struct bio *bio)
 {
@@ -1220,7 +1224,8 @@ static int __sdfat_revalidate_common(struct dentry *dentry)
 
 	spin_lock(&dentry->d_lock);
 	if ((!dentry->d_inode) && (!__check_dstate_locked(dentry) &&
-		(dentry->d_time != dentry->d_parent->d_inode->i_version))) {
+		(dentry->d_time !=
+		(unsigned long)inode_peek_iversion(dentry->d_parent->d_inode)))) {
 		ret = 0;
 	}
 	spin_unlock(&dentry->d_lock);
@@ -2368,7 +2373,7 @@ static int __sdfat_create(struct inode *dir, struct dentry *dentry)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	FILE_ID_T fid;
 	loff_t i_pos;
 	int err;
@@ -2385,7 +2390,7 @@ static int __sdfat_create(struct inode *dir, struct dentry *dentry)
 
 	__lock_d_revalidate(dentry);
 
-	dir->i_version++;
+	inode_inc_iversion(dir);
 	dir->i_ctime = dir->i_mtime = dir->i_atime = ts;
 	if (IS_DIRSYNC(dir))
 		(void) sdfat_sync_inode(dir);
@@ -2398,7 +2403,7 @@ static int __sdfat_create(struct inode *dir, struct dentry *dentry)
 		err = PTR_ERR(inode);
 		goto out;
 	}
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = ts;
 	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
 
@@ -2511,7 +2516,7 @@ static struct dentry *__sdfat_lookup(struct inode *dir, struct dentry *dentry)
 	dput(alias);
 out:
 	/* initialize d_time even though it is positive dentry */
-	dentry->d_time = dir->i_version;
+	dentry->d_time = (unsigned long)inode_peek_iversion(dir);
 	__unlock_super(sb);
 
 	dentry = d_splice_alias(inode, dentry);
@@ -2529,7 +2534,7 @@ static int sdfat_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = dir->i_sb;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	int err;
 
 	__lock_super(sb);
@@ -2548,7 +2553,7 @@ static int sdfat_unlink(struct inode *dir, struct dentry *dentry)
 
 	__lock_d_revalidate(dentry);
 
-	dir->i_version++;
+	inode_inc_iversion(dir);
 	dir->i_mtime = dir->i_atime = ts;
 	if (IS_DIRSYNC(dir))
 		(void) sdfat_sync_inode(dir);
@@ -2558,7 +2563,7 @@ static int sdfat_unlink(struct inode *dir, struct dentry *dentry)
 	clear_nlink(inode);
 	inode->i_mtime = inode->i_atime = ts;
 	sdfat_detach(inode);
-	dentry->d_time = dir->i_version;
+	dentry->d_time = (unsigned long)inode_peek_iversion(dir);
 out:
 	__unlock_d_revalidate(dentry);
 	__unlock_super(sb);
@@ -2570,7 +2575,7 @@ static int sdfat_symlink(struct inode *dir, struct dentry *dentry, const char *t
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	FILE_ID_T fid;
 	loff_t i_pos;
 	int err;
@@ -2600,7 +2605,7 @@ static int sdfat_symlink(struct inode *dir, struct dentry *dentry, const char *t
 
 	__lock_d_revalidate(dentry);
 
-	dir->i_version++;
+	inode_inc_iversion(dir);
 	dir->i_ctime = dir->i_mtime = dir->i_atime = ts;
 	if (IS_DIRSYNC(dir))
 		(void) sdfat_sync_inode(dir);
@@ -2613,7 +2618,7 @@ static int sdfat_symlink(struct inode *dir, struct dentry *dentry, const char *t
 		err = PTR_ERR(inode);
 		goto out;
 	}
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = ts;
 	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
 
@@ -2637,7 +2642,7 @@ static int __sdfat_mkdir(struct inode *dir, struct dentry *dentry)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	FILE_ID_T fid;
 	loff_t i_pos;
 	int err;
@@ -2654,7 +2659,7 @@ static int __sdfat_mkdir(struct inode *dir, struct dentry *dentry)
 
 	__lock_d_revalidate(dentry);
 
-	dir->i_version++;
+	inode_inc_iversion(dir);
 	dir->i_ctime = dir->i_mtime = dir->i_atime = ts;
 	if (IS_DIRSYNC(dir))
 		(void) sdfat_sync_inode(dir);
@@ -2668,7 +2673,7 @@ static int __sdfat_mkdir(struct inode *dir, struct dentry *dentry)
 		err = PTR_ERR(inode);
 		goto out;
 	}
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = ts;
 	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
 
@@ -2688,7 +2693,7 @@ static int sdfat_rmdir(struct inode *dir, struct dentry *dentry)
 {
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = dir->i_sb;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	int err;
 
 	__lock_super(sb);
@@ -2705,7 +2710,7 @@ static int sdfat_rmdir(struct inode *dir, struct dentry *dentry)
 
 	__lock_d_revalidate(dentry);
 
-	dir->i_version++;
+	inode_inc_iversion(dir);
 	dir->i_mtime = dir->i_atime = ts;
 	if (IS_DIRSYNC(dir))
 		(void) sdfat_sync_inode(dir);
@@ -2716,7 +2721,7 @@ static int sdfat_rmdir(struct inode *dir, struct dentry *dentry)
 	clear_nlink(inode);
 	inode->i_mtime = inode->i_atime = ts;
 	sdfat_detach(inode);
-	dentry->d_time = dir->i_version;
+	dentry->d_time = (unsigned long)inode_peek_iversion(dir);
 out:
 	__unlock_d_revalidate(dentry);
 	__unlock_super(sb);
@@ -2729,7 +2734,7 @@ static int __sdfat_rename(struct inode *old_dir, struct dentry *old_dentry,
 {
 	struct inode *old_inode, *new_inode;
 	struct super_block *sb = old_dir->i_sb;
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	loff_t i_pos;
 	int err;
 
@@ -2753,7 +2758,7 @@ static int __sdfat_rename(struct inode *old_dir, struct dentry *old_dentry,
 	__lock_d_revalidate(old_dentry);
 	__lock_d_revalidate(new_dentry);
 
-	new_dir->i_version++;
+	inode_inc_iversion(new_dir);
 	new_dir->i_ctime = new_dir->i_mtime = new_dir->i_atime = ts;
 	if (IS_DIRSYNC(new_dir))
 		(void) sdfat_sync_inode(new_dir);
@@ -2774,7 +2779,7 @@ static int __sdfat_rename(struct inode *old_dir, struct dentry *old_dentry,
 			inc_nlink(new_dir);
 	}
 
-	old_dir->i_version++;
+	inode_inc_iversion(old_dir);
 	old_dir->i_ctime = old_dir->i_mtime = ts;
 	if (IS_DIRSYNC(old_dir))
 		(void) sdfat_sync_inode(old_dir);
@@ -2883,6 +2888,18 @@ static int sdfat_sanitize_mode(const struct sdfat_sb_info *sbi,
 	return 0;
 }
 
+/*
+ * sdfat_block_truncate_page() zeroes out a mapping from file offset `from'
+ * up to the end of the block which corresponds to `from'.
+ * This is required during truncate to physically zeroout the tail end
+ * of that block so it doesn't yield old data if the file is later grown.
+ * Also, avoid causing failure from fsx for cases of "data past EOF"
+ */
+static int sdfat_block_truncate_page(struct inode *inode, loff_t from)
+{
+	return block_truncate_page(inode->i_mapping, from, sdfat_get_block);
+}
+
 static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 {
 
@@ -2898,7 +2915,7 @@ static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 		&& (attr->ia_size > i_size_read(inode))) {
 		error = sdfat_cont_expand(inode, attr->ia_size);
 		if (error || attr->ia_valid == ATTR_SIZE)
-			return error;
+			goto out;
 		attr->ia_valid &= ~ATTR_SIZE;
 	}
 
@@ -2912,7 +2929,7 @@ static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 	error = setattr_prepare(dentry, attr);
 	attr->ia_valid = ia_valid;
 	if (error)
-		return error;
+		goto out;
 
 	if (((attr->ia_valid & ATTR_UID) &&
 		 (!uid_eq(attr->ia_uid, sbi->options.fs_uid))) ||
@@ -2920,7 +2937,8 @@ static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 		 (!gid_eq(attr->ia_gid, sbi->options.fs_gid))) ||
 		((attr->ia_valid & ATTR_MODE) &&
 		 (attr->ia_mode & ~(S_IFREG | S_IFLNK | S_IFDIR | S_IRWXUGO)))) {
-		return -EPERM;
+		error = -EPERM;
+		goto out;
 	}
 
 	/*
@@ -2936,6 +2954,10 @@ static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 
 	/* patch 1.2.0 : fixed the problem of size mismatch. */
 	if (attr->ia_valid & ATTR_SIZE) {
+		error = sdfat_block_truncate_page(inode, attr->ia_size);
+		if (error)
+			goto out;
+
 		old_size = i_size_read(inode);
 
 		/* TO CHECK evicting directory works correctly */
@@ -2945,8 +2967,7 @@ static int sdfat_setattr(struct dentry *dentry, struct iattr *attr)
 	}
 	setattr_copy(inode, attr);
 	mark_inode_dirty(inode);
-
-
+out:
 	TMSG("%s exited with err(%d)\n", __func__, error);
 	return error;
 }
@@ -3895,7 +3916,7 @@ static int sdfat_fill_inode(struct inode *inode, const FILE_ID_T *fid)
 	SDFAT_I(inode)->target = NULL;
 	inode->i_uid = sbi->options.fs_uid;
 	inode->i_gid = sbi->options.fs_gid;
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	inode->i_generation = get_seconds();
 
 	if (fsapi_read_inode(inode, &info) < 0) {
@@ -3973,7 +3994,7 @@ static struct inode *sdfat_build_inode(struct super_block *sb,
 		goto out;
 	}
 	inode->i_ino = iunique(sb, SDFAT_ROOT_INO);
-	inode->i_version = 1;
+	inode_set_iversion(inode, 1);
 	err = sdfat_fill_inode(inode, fid);
 	if (err) {
 		iput(inode);
@@ -4532,6 +4553,12 @@ enum {
 	Opt_discard,
 	Opt_fs,
 	Opt_adj_req,
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+	Opt_shortname_lower,
+	Opt_shortname_win95,
+	Opt_shortname_winnt,
+	Opt_shortname_mixed,
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
 };
 
 static const match_table_t sdfat_tokens = {
@@ -4560,6 +4587,12 @@ static const match_table_t sdfat_tokens = {
 	{Opt_discard, "discard"},
 	{Opt_fs, "fs=%s"},
 	{Opt_adj_req, "adj_req"},
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+	{Opt_shortname_lower, "shortname=lower"},
+	{Opt_shortname_win95, "shortname=win95"},
+	{Opt_shortname_winnt, "shortname=winnt"},
+	{Opt_shortname_mixed, "shortname=mixed"},
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
 	{Opt_err, NULL}
 };
 
@@ -4726,6 +4759,14 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 			IMSG("adjust request config is not enabled. ignore\n");
 #endif
 			break;
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+		case Opt_shortname_lower:
+		case Opt_shortname_win95:
+		case Opt_shortname_mixed:
+			pr_warn("[SDFAT] DRAGONS AHEAD! sdFAT only understands \"shortname=winnt\"!\n");
+		case Opt_shortname_winnt:
+			break;
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
 		default:
 			if (!silent) {
 				sdfat_msg(sb, KERN_ERR,
@@ -4773,7 +4814,7 @@ static int sdfat_read_root(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct sdfat_sb_info *sbi = SDFAT_SB(sb);
-	struct timespec ts;
+	sdfat_timespec_t ts;
 	FS_INFO_T *fsi = &(sbi->fsi);
 	DIR_ENTRY_T info;
 
@@ -4799,7 +4840,7 @@ static int sdfat_read_root(struct inode *inode)
 
 	inode->i_uid = sbi->options.fs_uid;
 	inode->i_gid = sbi->options.fs_gid;
-	inode->i_version++;
+	inode_inc_iversion(inode);
 	inode->i_generation = 0;
 	inode->i_mode = sdfat_make_mode(sbi, ATTR_SUBDIR, S_IRWXUGO);
 	inode->i_op = &sdfat_dir_inode_operations;
@@ -4923,7 +4964,7 @@ static int sdfat_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	root_inode->i_ino = SDFAT_ROOT_INO;
-	root_inode->i_version = 1;
+	inode_set_iversion(root_inode, 1);
 
 	err = sdfat_read_root(root_inode);
 	if (err) {
@@ -5050,6 +5091,37 @@ static struct file_system_type sdfat_fs_type = {
 #endif /* CONFIG_SDFAT_DBG_IOCTL */
 	.fs_flags    = FS_REQUIRES_DEV,
 };
+MODULE_ALIAS_FS("sdfat");
+
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+static struct file_system_type exfat_fs_type = {
+	.owner       = THIS_MODULE,
+	.name        = "exfat",
+	.mount       = sdfat_fs_mount,
+#ifdef CONFIG_SDFAT_DBG_IOCTL
+	.kill_sb    = sdfat_debug_kill_sb,
+#else
+	.kill_sb    = kill_block_super,
+#endif /* CONFIG_SDFAT_DBG_IOCTL */
+	.fs_flags    = FS_REQUIRES_DEV,
+};
+MODULE_ALIAS_FS("exfat");
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
+
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+static struct file_system_type vfat_fs_type = {
+	.owner       = THIS_MODULE,
+	.name        = "vfat",
+	.mount       = sdfat_fs_mount,
+#ifdef CONFIG_SDFAT_DBG_IOCTL
+	.kill_sb    = sdfat_debug_kill_sb,
+#else
+	.kill_sb    = kill_block_super,
+#endif /* CONFIG_SDFAT_DBG_IOCTL */
+	.fs_flags    = FS_REQUIRES_DEV,
+};
+MODULE_ALIAS_FS("vfat");
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
 
 static int __init init_sdfat_fs(void)
 {
@@ -5062,7 +5134,7 @@ static int __init init_sdfat_fs(void)
 
 	sdfat_kset = kset_create_and_add("sdfat", NULL, fs_kobj);
 	if (!sdfat_kset) {
-		pr_err("[SDFAT] failed to create fs_kobj\n");
+		pr_err("[SDFAT] failed to create sdfat kset\n");
 		err = -ENOMEM;
 		goto error;
 	}
@@ -5074,6 +5146,10 @@ static int __init init_sdfat_fs(void)
 	}
 
 	err = sdfat_statistics_init(sdfat_kset);
+	if (err)
+		goto error;
+
+	err = sdfat_uevent_init(sdfat_kset);
 	if (err)
 		goto error;
 
@@ -5089,8 +5165,25 @@ static int __init init_sdfat_fs(void)
 		goto error;
 	}
 
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+	err = register_filesystem(&exfat_fs_type);
+	if (err) {
+		pr_err("[SDFAT] failed to register for exfat filesystem\n");
+		goto error;
+	}
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
+
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+	err = register_filesystem(&vfat_fs_type);
+	if (err) {
+		pr_err("[SDFAT] failed to register for vfat filesystem\n");
+		goto error;
+	}
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
+
 	return 0;
 error:
+	sdfat_uevent_uninit();
 	sdfat_statistics_uninit();
 
 	if (sdfat_kset) {
@@ -5108,6 +5201,7 @@ error:
 
 static void __exit exit_sdfat_fs(void)
 {
+	sdfat_uevent_uninit();
 	sdfat_statistics_uninit();
 
 	if (sdfat_kset) {
@@ -5118,7 +5212,12 @@ static void __exit exit_sdfat_fs(void)
 
 	sdfat_destroy_inodecache();
 	unregister_filesystem(&sdfat_fs_type);
-
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+	unregister_filesystem(&exfat_fs_type);
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
+#ifdef CONFIG_SDFAT_USE_FOR_VFAT
+	unregister_filesystem(&vfat_fs_type);
+#endif /* CONFIG_SDFAT_USE_FOR_VFAT */
 	fsapi_shutdown();
 }
 

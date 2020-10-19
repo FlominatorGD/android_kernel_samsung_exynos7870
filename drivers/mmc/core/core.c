@@ -177,9 +177,10 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 				completion = ktime_get();
 				delta_us = ktime_us_delta(completion,
 							  mrq->io_start);
-				blk_update_latency_hist(&host->io_lat_s,
-					(mrq->data->flags & MMC_DATA_READ),
-					delta_us);
+				blk_update_latency_hist(
+					(mrq->data->flags & MMC_DATA_READ) ?
+					&host->io_lat_read :
+					&host->io_lat_write, delta_us);
 			}
 #endif
 			trace_mmc_blk_rw_end(cmd->opcode, cmd->arg, mrq->data);
@@ -1058,7 +1059,7 @@ static inline void mmc_set_ios(struct mmc_host *host)
 		"width %u timing %u\n",
 		 mmc_hostname(host), ios->clock, ios->bus_mode,
 		 ios->power_mode, ios->chip_select, ios->vdd,
-		 ios->bus_width, ios->timing);
+		 1 << ios->bus_width, ios->timing);
 
 	if (ios->clock > 0)
 		mmc_set_ungated(host);
@@ -1290,8 +1291,12 @@ int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 
 	voltage_ranges = of_get_property(np, "voltage-ranges", &num_ranges);
 	num_ranges = num_ranges / sizeof(*voltage_ranges) / 2;
-	if (!voltage_ranges || !num_ranges) {
-		pr_info("%s: voltage-ranges unspecified\n", np->full_name);
+	if (!voltage_ranges) {
+		pr_debug("%s: voltage-ranges unspecified\n", np->full_name);
+		return -EINVAL;
+	}
+	if (!num_ranges) {
+		pr_err("%s: voltage-ranges empty\n", np->full_name);
 		return -EINVAL;
 	}
 
@@ -1520,19 +1525,6 @@ int __mmc_set_signal_voltage(struct mmc_host *host, int signal_voltage)
 	int err = 0;
 	int old_signal_voltage = host->ios.signal_voltage;
 
-#if defined(CONFIG_BCM43454) || defined(CONFIG_BCM43454_MODULE) || \
-	defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) || \
-	defined(CONFIG_BCM43456) || defined(CONFIG_BCM43456_MODULE)
-	/* Some devices use only dedicated specific signaling level for
-	 * design reasons. MMC_CAP2_BROKEN_VOLTAGE flag is used when
-	 * there is no needs to change to any signaling level.
-	 */
-	if (host->caps2 & MMC_CAP2_BROKEN_VOLTAGE)
-		return 0;
-#endif /*(CONFIG_BCM43454) || (CONFIG_BCM43454_MODULE) || \
-	(CONFIG_BCM43455) || (CONFIG_BCM43455_MODULE) || \
-	(CONFIG_BCM43456) || (CONFIG_BCM43456_MODULE)*/
-
 	host->ios.signal_voltage = signal_voltage;
 	if (host->ops->start_signal_voltage_switch) {
 		mmc_host_clk_hold(host);
@@ -1554,19 +1546,6 @@ int mmc_set_signal_voltage(struct mmc_host *host, int signal_voltage, u32 ocr)
 	u32 clock;
 
 	BUG_ON(!host);
-
-#if defined(CONFIG_BCM43454) || defined(CONFIG_BCM43454_MODULE) || \
-	defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) || \
-	defined(CONFIG_BCM43456) || defined(CONFIG_BCM43456_MODULE)
-	/* Some devices use only dedicated specific signaling level for
-	 * design reasons. MMC_CAP2_BROKEN_VOLTAGE flag is used when
-	 * there is no needs to change to any signaling level.
-	 */
-	if (host->caps2 & MMC_CAP2_BROKEN_VOLTAGE)
-		return 0;
-#endif /*(CONFIG_BCM43454) || (CONFIG_BCM43454_MODULE) || \
-	(CONFIG_BCM43455) || (CONFIG_BCM43455_MODULE) || \
-	(CONFIG_BCM43456) || (CONFIG_BCM43456_MODULE)*/
 
 	/*
 	 * Send CMD11 only if the request is to switch the card to
@@ -2708,10 +2687,7 @@ void mmc_start_host(struct mmc_host *host)
 		mmc_power_off(host);
 	else
 		mmc_power_up(host, host->ocr_avail);
-#if defined(CONFIG_QCOM_WIFI) || defined(CONFIG_BCM4343)  || defined(CONFIG_BCM4343_MODULE) || \
-	defined(CONFIG_BCM43454)  || defined(CONFIG_BCM43454_MODULE) || \
-	defined(CONFIG_BCM43455)  || defined(CONFIG_BCM43455_MODULE) || \
-	defined(CONFIG_BCM43456)  || defined(CONFIG_BCM43456_MODULE)
+#if defined(CONFIG_QCOM_WIFI)
 	if (!strcmp("mmc1", mmc_hostname(host))) {
 		printk("%s skip mmc_detect_change\n", mmc_hostname(host));
 	} else if (host->caps2 & MMC_CAP2_SKIP_INIT_SCAN) {
@@ -2727,10 +2703,7 @@ void mmc_start_host(struct mmc_host *host)
 		mmc_gpiod_request_cd_irq(host);
 		_mmc_detect_change(host, 0, false);
 	}
-#endif /* CONFIG_QCOM_WIFI || CONFIG_BCM4343 || CONFIG_BCM4343_MODULE || \
-	CONFIG_BCM43454 || CONFIG_BCM43454_MODULE || \
-	CONFIG_BCM43455 || CONFIG_BCM43455_MODULE || \
-	CONFIG_BCM43456 || CONFIG_BCM43456_MODULE */
+#endif /* CONFIG_QCOM_WIFI */
 }
 
 void mmc_stop_host(struct mmc_host *host)
@@ -2982,25 +2955,6 @@ destroy_workqueue:
 
 	return ret;
 }
-#if defined(CONFIG_BCM4343) || defined(CONFIG_BCM4343_MODULE) || \
-	defined(CONFIG_BCM43454) || defined(CONFIG_BCM43454_MODULE) || \
-	defined(CONFIG_BCM43455) || defined(CONFIG_BCM43455_MODULE) || \
-	defined(CONFIG_BCM43456) || defined(CONFIG_BCM43456_MODULE)
-void mmc_ctrl_power(struct mmc_host *host, bool onoff)
-{
-	 if (!onoff) {
-		mmc_claim_host(host);
-                mmc_set_clock(host, host->f_init);
-		mmc_delay(1);
-		mmc_release_host(host);
-	 }
-}
-EXPORT_SYMBOL(mmc_ctrl_power);
-#endif /* CONFIG_BCM4343 || CONFIG_BCM4343_MODULE || \
-	  CONFIG_BCM43454 || CONFIG_BCM43454_MODULE || \
-	  CONFIG_BCM43455 || CONFIG_BCM43455_MODULE || \
-	  CONFIG_BCM43456 || CONFIG_BCM43456_MODULE */
-
 
 static void __exit mmc_exit(void)
 {
@@ -3015,8 +2969,14 @@ static ssize_t
 latency_hist_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+	size_t written_bytes;
 
-	return blk_latency_hist_show(&host->io_lat_s, buf);
+	written_bytes = blk_latency_hist_show("Read", &host->io_lat_read,
+			buf, PAGE_SIZE);
+	written_bytes += blk_latency_hist_show("Write", &host->io_lat_write,
+			buf + written_bytes, PAGE_SIZE - written_bytes);
+
+	return written_bytes;
 }
 
 /*
@@ -3034,9 +2994,10 @@ latency_hist_store(struct device *dev, struct device_attribute *attr,
 
 	if (kstrtol(buf, 0, &value))
 		return -EINVAL;
-	if (value == BLK_IO_LAT_HIST_ZERO)
-		blk_zero_latency_hist(&host->io_lat_s);
-	else if (value == BLK_IO_LAT_HIST_ENABLE ||
+	if (value == BLK_IO_LAT_HIST_ZERO) {
+		memset(&host->io_lat_read, 0, sizeof(host->io_lat_read));
+		memset(&host->io_lat_write, 0, sizeof(host->io_lat_write));
+	} else if (value == BLK_IO_LAT_HIST_ENABLE ||
 		 value == BLK_IO_LAT_HIST_DISABLE)
 		host->latency_hist_enabled = value;
 	return count;

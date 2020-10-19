@@ -205,7 +205,7 @@ static const struct icmp_control icmp_pointers[NR_ICMP_TYPES+1];
  */
 static struct sock *icmp_sk(struct net *net)
 {
-	return net->ipv4.icmp_sk[smp_processor_id()];
+	return *this_cpu_ptr(net->ipv4.icmp_sk);
 }
 
 static inline struct sock *icmp_xmit_lock(struct net *net)
@@ -255,10 +255,11 @@ bool icmp_global_allow(void)
 	bool rc = false;
 
 	/* Check if token bucket is empty and cannot be refilled
-	 * without taking the spinlock.
+	 * without taking the spinlock. The READ_ONCE() are paired
+	 * with the following WRITE_ONCE() in this same function.
 	 */
-	if (!icmp_global.credit) {
-		delta = min_t(u32, now - icmp_global.stamp, HZ);
+	if (!READ_ONCE(icmp_global.credit)) {
+		delta = min_t(u32, now - READ_ONCE(icmp_global.stamp), HZ);
 		if (delta < HZ / 50)
 			return false;
 	}
@@ -268,14 +269,14 @@ bool icmp_global_allow(void)
 	if (delta >= HZ / 50) {
 		incr = sysctl_icmp_msgs_per_sec * delta / HZ ;
 		if (incr)
-			icmp_global.stamp = now;
+			WRITE_ONCE(icmp_global.stamp, now);
 	}
 	credit = min_t(u32, icmp_global.credit + incr, sysctl_icmp_msgs_burst);
 	if (credit) {
 		credit--;
 		rc = true;
 	}
-	icmp_global.credit = credit;
+	WRITE_ONCE(icmp_global.credit, credit);
 	spin_unlock(&icmp_global.lock);
 	return rc;
 }
@@ -399,7 +400,7 @@ static void icmp_reply(struct icmp_bxm *icmp_param, struct sk_buff *skb)
 		return;
 
 	sk = icmp_xmit_lock(net);
-	if (sk == NULL)
+	if (!sk)
 		return;
 	inet = inet_sk(sk);
 
@@ -612,7 +613,7 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 						 skb_in->data,
 						 sizeof(_inner_type),
 						 &_inner_type);
-			if (itp == NULL)
+			if (!itp)
 				goto out;
 
 			/*
@@ -630,7 +631,7 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 		return;
 
 	sk = icmp_xmit_lock(net);
-	if (sk == NULL)
+	if (!sk)
 		goto out_free;
 
 	/*
@@ -787,8 +788,8 @@ static void icmp_unreach(struct sk_buff *skb)
 			 */
 			switch (net->ipv4.sysctl_ip_no_pmtu_disc) {
 			default:
-				LIMIT_NETDEBUG(KERN_INFO pr_fmt("%pI4: fragmentation needed and DF set\n"),
-					       &iph->daddr);
+				net_dbg_ratelimited("%pI4: fragmentation needed and DF set\n",
+						    &iph->daddr);
 				break;
 			case 2:
 				goto out;
@@ -801,8 +802,8 @@ static void icmp_unreach(struct sk_buff *skb)
 			}
 			break;
 		case ICMP_SR_FAILED:
-			LIMIT_NETDEBUG(KERN_INFO pr_fmt("%pI4: Source Route Failed\n"),
-				       &iph->daddr);
+			net_dbg_ratelimited("%pI4: Source Route Failed\n",
+					    &iph->daddr);
 			break;
 		default:
 			break;
@@ -1127,8 +1128,8 @@ static void __net_exit icmp_sk_exit(struct net *net)
 	int i;
 
 	for_each_possible_cpu(i)
-		inet_ctl_sock_destroy(net->ipv4.icmp_sk[i]);
-	kfree(net->ipv4.icmp_sk);
+		inet_ctl_sock_destroy(*per_cpu_ptr(net->ipv4.icmp_sk, i));
+	free_percpu(net->ipv4.icmp_sk);
 	net->ipv4.icmp_sk = NULL;
 }
 
@@ -1136,9 +1137,8 @@ static int __net_init icmp_sk_init(struct net *net)
 {
 	int i, err;
 
-	net->ipv4.icmp_sk =
-		kzalloc(nr_cpu_ids * sizeof(struct sock *), GFP_KERNEL);
-	if (net->ipv4.icmp_sk == NULL)
+	net->ipv4.icmp_sk = alloc_percpu(struct sock *);
+	if (!net->ipv4.icmp_sk)
 		return -ENOMEM;
 
 	for_each_possible_cpu(i) {
@@ -1149,7 +1149,7 @@ static int __net_init icmp_sk_init(struct net *net)
 		if (err < 0)
 			goto fail;
 
-		net->ipv4.icmp_sk[i] = sk;
+		*per_cpu_ptr(net->ipv4.icmp_sk, i) = sk;
 
 		/* Enough space for 2 64K ICMP packets, including
 		 * sk_buff/skb_shared_info struct overhead.
@@ -1190,8 +1190,8 @@ static int __net_init icmp_sk_init(struct net *net)
 
 fail:
 	for_each_possible_cpu(i)
-		inet_ctl_sock_destroy(net->ipv4.icmp_sk[i]);
-	kfree(net->ipv4.icmp_sk);
+		inet_ctl_sock_destroy(*per_cpu_ptr(net->ipv4.icmp_sk, i));
+	free_percpu(net->ipv4.icmp_sk);
 	return err;
 }
 

@@ -67,16 +67,6 @@ config EXYNOS_SNAPSHOT_HRTIMER
 	depends on EXYNOS_SNAPSHOT && !EXYNOS_SNAPSHOT_MINIMIZED_MODE
 	default n
 
-config EXYNOS_SNAPSHOT_REG
-	bool "Enable debugging of accessing register by kevent"
-	depends on EXYNOS_SNAPSHOT && !EXYNOS_SNAPSHOT_MINIMIZED_MODE
-	default n
-
-config EXYNOS_SNAPSHOT_REGULATOR
-	bool "Enable debugging of regulator and pmic driver"
-	depends on EXYNOS_SNAPSHOT && !EXYNOS_SNAPSHOT_MINIMIZED_MODE
-	default y
-
 config EXYNOS_SNAPSHOT_THERMAL
 	bool "Enable debugging of thermal driver"
 	depends on EXYNOS_SNAPSHOT && !EXYNOS_SNAPSHOT_MINIMIZED_MODE && EXYNOS_THERMAL
@@ -90,9 +80,6 @@ config EXYNOS_SNAPSHOT_MBOX
 config EXYNOS_SNAPSHOT_PSTORE
 	bool "Enable supporting ramoops driver for pstore filesystem"
 	depends on EXYNOS_SNAPSHOT
-	depends on ANDROID_MAJOR_VERSION != "m"
-	depends on ANDROID_MAJOR_VERSION != "l"
-	depends on ANDROID_MAJOR_VERSION != "k"
 	select PSTORE
 	select PSTORE_RAM
 	select PSTORE_PMSG
@@ -106,11 +93,6 @@ config EXYNOS_SNAPSHOT_HOOK_LOGGER
 config EXYNOS_SNAPSHOT_PANIC_REBOOT
 	bool "Enable forced reboot after panic for ramdump"
 	depends on EXYNOS_SNAPSHOT
-	default y
-
-config EXYNOS_SNAPSHOT_WATCHDOG_RESET
-	bool "Support watchdog reset when hardlockup detect"
-	depends on EXYNOS_SNAPSHOT && EXYNOS_SNAPSHOT_PANIC_REBOOT
 	default y
 
 config EXYNOS_SNAPSHOT_CRASH_KEY
@@ -137,21 +119,6 @@ menuconfig EXYNOS_CORESIGHT
 	bool "Enable Coresight of exynos"
 	depends on ARCH_EXYNOS
 	default n
-
-config EXYNOS_CORESIGHT_PC_INFO
-	bool "Show Porgram Counter information"
-	depends on EXYNOS_CORESIGHT
-	default y
-	help
-	  Show Program Counter information When kernel panic.
-
-config PC_ITERATION
-	int "Number of Program Coutner information"
-	depends on EXYNOS_CORESIGHT_PC_INFO
-	range 1 10
-	default 5
-	help
-	  Print out Program Counter as iteration value.
 
 config EXYNOS_CORESIGHT_MAINTAIN_DBG_REG
 	bool "Save/Restore Debug Registers"

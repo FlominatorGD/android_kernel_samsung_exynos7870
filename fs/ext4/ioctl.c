@@ -111,7 +111,7 @@ static long swap_inode_boot_loader(struct super_block *sb,
 	if (!inode_owner_or_capable(inode) || !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	inode_bl = ext4_iget(sb, EXT4_BOOT_LOADER_INO);
+	inode_bl = ext4_iget(sb, EXT4_BOOT_LOADER_INO, EXT4_IGET_SPECIAL);
 	if (IS_ERR(inode_bl))
 		return PTR_ERR(inode_bl);
 	ei_bl = EXT4_I(inode_bl);
@@ -714,11 +714,6 @@ encryption_policy_out:
 		return -EOPNOTSUPP;
 #endif
 	}
-	case FS_IOC_INVAL_MAPPING:
-	{
-		return invalidate_mapping_pages(inode->i_mapping, 0, -1);
-	}
-
 	default:
 		return -ENOTTY;
 	}

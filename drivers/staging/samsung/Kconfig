@@ -33,14 +33,6 @@ config SEC_DEBUG_RESET_REASON
 	  This option enables storing reset reason history file
 	  This option enables reading the reset reason history using proc/reset_reason file
 
-config SEC_DEBUG_EXTRA_INFO
-	bool "Enable TN reset reason extra info"
-	depends on SEC_DEBUG && SEC_DEBUG_RESET_REASON
-	default n
-	help
-	  This option enables storing reset reason extra info
-	  This option enables ap reset info bigdata based on reset reason extra info
-
 config SEC_DEBUG_HW_PARAM
 	bool "Enable TN HW PARAM bigdata info"
 	depends on SEC_DEBUG && SEC_DEBUG_RESET_REASON
@@ -48,25 +40,12 @@ config SEC_DEBUG_HW_PARAM
 	help
 	  This option enables storing hw param bigdata info
 
-config SEC_DEBUG_AUTO_SUMMARY
-	bool "Enable TN kernel fault auto summary"
-	depends on SEC_DEBUG
-	default n
-	help
-	  This option enables kernel fault auto summary feature
-	  This option also requires bootloader change that enables auto summary extraction along with ramdump
-
 config SEC_DEBUG_LAST_KMSG
 	bool "Write last_kmsg at /proc/last_kmsg"
 	depends on SEC_DEBUG
 	default y
 	help
 	  This option enables /proc/last_kmsg support.
-
-config SEC_DEBUG_FILE_LEAK
-	bool "Panic when file leak detected"
-	depends on !SAMSUNG_PRODUCT_SHIP
-	default y
 
 config SEC_UPLOAD
 	bool "Enable TN upload mode"
@@ -115,13 +94,6 @@ config ARGOS
 	  Check throughput and set appropriate system parameters(CPU freq, affinity, etc)
 
 comment "Samsung TN Logging Options"
-config SEC_AVC_LOG
-	default n
-	bool "Enable avc audit log support" if EMBEDDED
-	depends on SEC_EXT
-	help
-	  This option enables additional log buffer for audit log.
-
 config SEC_DEBUG_TSP_LOG
 	default n
 	bool "Enable tsp log support" if EMBEDDED
@@ -144,13 +116,6 @@ menuconfig SEC_PM
 	help
 	  Samsung TN Power Management.
 
-config SEC_PM_DEBUG
-	bool "Enable Samsung TN Power management debug support"
-	default y
-	depends on SEC_PM
-	help
-	  Enable Samsung TN Power management debug support.
-
 config SEC_EVENT_LOG
 	bool "Enable Event log parser"
 	depends on SEC_EXT
@@ -161,9 +126,8 @@ config SEC_NAD
 	bool "Samsung TN NAD Feature"
 	default n
 	help
-
 	  Samsung TN NAD Feature, support AT CMD for NAD 2.0
-	  	  
+
 config SEC_NAD_MANUAL_PARAM_READTIME
 	int "Samsung TN NAD Feature"
 	depends on SEC_NAD
@@ -177,20 +141,3 @@ config SEC_NAD_API
 	default n
 	help
 	  Samsung TN NAD Feature, Support NAD API to check gpio pull-up registance
-
-choice
-	prompt "Version of GAF structure"
-	depends on SEC_DEBUG
-	default SEC_DEBUG_GAF_V4 if FIVE
-	default SEC_DEBUG_GAF_V3
-
-	config SEC_DEBUG_GAF_V3
-		bool "Use GAF structure version 3"
-		help
-		  Default option for FIVE-disabled kernel
-
-	config SEC_DEBUG_GAF_V4
-		bool "Use GAF structure version 4"
-		help
-		  Default option for FIVE-enabled kernel
-endchoice

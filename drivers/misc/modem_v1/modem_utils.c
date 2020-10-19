@@ -680,7 +680,7 @@ void stop_net_ifaces(struct link_device *ld)
 	unsigned long flags;
 	spin_lock_irqsave(&ld->netif_lock, flags);
 
-	if (!atomic_read(&ld->netif_stopped) > 0) {
+	if (!(atomic_read(&ld->netif_stopped) > 0)) {
 		if (ld->msd)
 			netif_tx_flowctl(ld->msd, true);
 
@@ -1352,9 +1352,4 @@ int __ref register_cp_crash_notifier(struct notifier_block *nb)
 void __ref modemctl_notify_event(enum modemctl_event evt)
 {
 	raw_notifier_call_chain(&cp_crash_notifier, evt, NULL);
-}
-
-void mif_set_snapshot(bool enable)
-{
-	exynos_ss_set_enable("log_kevents", enable);
 }

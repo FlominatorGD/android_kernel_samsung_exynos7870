@@ -356,15 +356,20 @@ static int f_midi_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	/* allocate a bunch of read buffers and queue them all at once. */
 	for (i = 0; i < midi->qlen && err == 0; i++) {
 		struct usb_request *req =
-			midi_alloc_ep_req(midi->out_ep, midi->buflen);
+			midi_alloc_ep_req(midi->out_ep,
+				max_t(unsigned, midi->buflen,
+					midi_bulk_out_desc.wMaxPacketSize));
 		if (req == NULL)
 			return -ENOMEM;
 
 		req->complete = f_midi_complete;
 		err = usb_ep_queue(midi->out_ep, req, GFP_ATOMIC);
 		if (err) {
-			ERROR(midi, "%s queue req: %d\n",
+			ERROR(midi, "%s: couldn't enqueue request: %d\n",
 				    midi->out_ep->name, err);
+			if (req->buf != NULL)
+				free_ep_req(midi->out_ep, req);
+			return err;
 		}
 	}
 
@@ -558,10 +563,16 @@ static void f_midi_transmit(struct f_midi *midi, struct usb_request *req)
 		}
 	}
 
-	if (req->length > 0)
-		usb_ep_queue(ep, req, GFP_ATOMIC);
-	else
+	if (req->length > 0 && ep->enabled) {
+		int err;
+
+		err = usb_ep_queue(ep, req, GFP_ATOMIC);
+		if (err < 0)
+			ERROR(midi, "%s queue req: %d\n",
+			      midi->in_ep->name, err);
+	} else {
 		free_ep_req(ep, req);
+	}
 }
 
 static void f_midi_in_tasklet(unsigned long data)

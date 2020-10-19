@@ -97,6 +97,10 @@ out:
 	 */
 	if (ca->get_info)
 		memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
+	if (ca->flags & TCP_CONG_NEEDS_ECN)
+		INET_ECN_xmit(sk);
+	else
+		INET_ECN_dontxmit(sk);
 }
 
 void tcp_init_congestion_control(struct sock *sk)
@@ -106,6 +110,23 @@ void tcp_init_congestion_control(struct sock *sk)
 	tcp_sk(sk)->prior_ssthresh = 0;
 	if (icsk->icsk_ca_ops->init)
 		icsk->icsk_ca_ops->init(sk);
+	if (tcp_ca_needs_ecn(sk))
+		INET_ECN_xmit(sk);
+	else
+		INET_ECN_dontxmit(sk);
+}
+
+static void tcp_reinit_congestion_control(struct sock *sk,
+					  const struct tcp_congestion_ops *ca)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	tcp_cleanup_congestion_control(sk);
+	icsk->icsk_ca_ops = ca;
+	icsk->icsk_ca_setsockopt = 1;
+
+	if (!((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)))
+		tcp_init_congestion_control(sk);
 }
 
 /* Manage refcounts on socket close. */
@@ -264,22 +285,13 @@ int tcp_set_congestion_control(struct sock *sk, const char *name)
 #endif
 	if (!ca)
 		err = -ENOENT;
-
 	else if (!((ca->flags & TCP_CONG_NON_RESTRICTED) ||
 		   ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN)))
 		err = -EPERM;
-
 	else if (!try_module_get(ca->owner))
 		err = -EBUSY;
-
-	else {
-		tcp_cleanup_congestion_control(sk);
-		icsk->icsk_ca_ops = ca;
-		icsk->icsk_ca_setsockopt = 1;
-
-		if (sk->sk_state != TCP_CLOSE && icsk->icsk_ca_ops->init)
-			icsk->icsk_ca_ops->init(sk);
-	}
+	else
+		tcp_reinit_congestion_control(sk, ca);
  out:
 	rcu_read_unlock();
 	return err;

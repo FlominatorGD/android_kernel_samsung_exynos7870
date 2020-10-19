@@ -92,10 +92,23 @@ ssize_t iov_iter_get_pages_alloc(struct iov_iter *i, struct page ***pages,
 			size_t maxsize, size_t *start);
 int iov_iter_npages(const struct iov_iter *i, int maxpages);
 
-static inline size_t iov_iter_count(struct iov_iter *i)
+static inline size_t iov_iter_count(const struct iov_iter *i)
 {
 	return i->count;
 }
+
+static inline bool iter_is_iovec(const struct iov_iter *i)
+{
+	return !(i->type & (ITER_BVEC | ITER_KVEC));
+}
+
+/*
+ * Get one of READ or WRITE out of iter->type without any other flags OR'd in
+ * with it.
+ *
+ * The ?: is just for type safety.
+ */
+#define iov_iter_rw(i) ((0 ? (struct iov_iter *)0 : (i))->type & RW_MASK)
 
 /*
  * Cap the iov_iter by given limit; note that the second argument is

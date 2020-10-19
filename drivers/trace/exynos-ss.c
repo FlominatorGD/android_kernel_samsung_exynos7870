@@ -34,10 +34,6 @@
 #include <linux/clk-private.h>
 #include <linux/input.h>
 #include <linux/of_address.h>
-#ifdef CONFIG_SEC_PM_DEBUG
-#include <linux/uaccess.h>
-#include <linux/proc_fs.h>
-#endif
 
 #include <asm/cacheflush.h>
 #include <asm/ptrace.h>
@@ -86,7 +82,6 @@
 #define ESS_SIGN_SCRATCH		0xD
 #define ESS_SIGN_ALIVE			0xFACE
 #define ESS_SIGN_DEAD			0xDEAD
-#define ESS_SIGN_PANIC			0xBABA
 #define ESS_SIGN_SAFE_FAULT		0xFAFA
 #define ESS_SIGN_NORMAL_REBOOT		0xCAFE
 #define ESS_SIGN_FORCE_REBOOT		0xDAFE
@@ -97,10 +92,8 @@
 #define ESS_OFFSET_LAST_LOGBUF		(0x200)
 #define ESS_OFFSET_EMERGENCY_REASON	(0x300)
 #define ESS_OFFSET_CORE_POWER_STAT	(0x400)
-#define ESS_OFFSET_PANIC_STAT		(0x500)
 
 /* S5P_VA_SS_BASE + 0xC00 -- 0xFFF is reserved */
-#define ESS_OFFSET_PANIC_STRING 	(0xC00)
 #define ESS_OFFSET_SPARE_BASE		(ESS_HEADER_SZ + ESS_MMU_REG_SZ + ESS_CORE_REG_SZ)
 
 #define mpidr_cpu_num(mpidr)			\
@@ -210,16 +203,6 @@ struct exynos_ss_log {
 		int en;
 	} freq[ESS_LOG_MAX_NUM];
 #endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-	struct reg_log {
-		unsigned long long time;
-		int read;
-		size_t val;
-		size_t reg;
-		int en;
-		void *caller[ESS_CALLSTACK_MAX_NUM];
-	} reg[ESS_NR_CPUS][ESS_LOG_MAX_NUM];
-#endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_HRTIMER
 	struct hrtimer_log {
 		unsigned long long time;
@@ -228,16 +211,6 @@ struct exynos_ss_log {
 		void *fn;
 		int en;
 	} hrtimers[ESS_NR_CPUS][ESS_LOG_MAX_NUM];
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-	struct regulator_log {
-		unsigned long long time;
-		int cpu;
-		char name[SZ_16];
-		unsigned int reg;
-		unsigned int voltage;
-		int en;
-	} regulator[ESS_LOG_MAX_NUM];
 #endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
 	struct thermal_log {
@@ -313,9 +286,6 @@ struct exynos_ss_log_idx {
 #ifdef CONFIG_EXYNOS_SNAPSHOT_IRQ_EXIT
 	atomic_t irq_exit_log_idx[ESS_NR_CPUS];
 #endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-	atomic_t reg_log_idx[ESS_NR_CPUS];
-#endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_HRTIMER
 	atomic_t hrtimer_log_idx[ESS_NR_CPUS];
 #endif
@@ -324,12 +294,6 @@ struct exynos_ss_log_idx {
 #endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_FREQ
 	atomic_t freq_log_idx;
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-	atomic_t regulator_log_idx;
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-	atomic_t thermal_log_idx;
 #endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_MBOX
 	atomic_t mailbox_log_idx;
@@ -416,18 +380,13 @@ struct exynos_ss_interface {
 
 #ifdef CONFIG_S3C2410_WATCHDOG
 extern int s3c2410wdt_set_emergency_stop(void);
-extern int s3c2410wdt_set_emergency_reset(unsigned int timeout);
 extern int s3c2410wdt_keepalive_emergency(void);
 #else
 #define s3c2410wdt_set_emergency_stop() 	(-1)
-#define s3c2410wdt_set_emergency_reset(a)	do { } while(0)
 #define s3c2410wdt_keepalive_emergency()	do { } while(0)
 #endif
 extern void *return_address(int);
 extern void (*arm_pm_restart)(char str, const char *cmd);
-#ifdef CONFIG_EXYNOS_CORESIGHT_PC_INFO
-extern unsigned long exynos_cs_pc[NR_CPUS][ESS_ITERATION];
-#endif
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,5,00)
 extern void register_hook_logbuf(void (*)(const char));
 #else
@@ -442,19 +401,10 @@ extern int exynos_check_hardlockup_reason(void);
 
 typedef int (*ess_initcall_t)(const struct device_node *);
 
-#ifdef CONFIG_SEC_PM_DEBUG
-static bool sec_log_full;
-#endif
-
 /* purpose of debugging : should be removed */
 unsigned char *debug_curr_ptr;
 const char *debug_buf;
 size_t debug_size;
-
-#ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
-static void (*func_hook_auto_comm_lastfreq)(int type, int old_freq, int new_freq, u64 time);
-#endif
-
 
 /*
  * ---------------------------------------------------------------------------
@@ -510,31 +460,6 @@ static unsigned ess_irqexit_threshold =
 		CONFIG_EXYNOS_SNAPSHOT_IRQ_EXIT_THRESHOLD;
 #endif
 
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-struct ess_reg_list {
-	size_t addr;
-	size_t size;
-};
-
-static struct ess_reg_list ess_reg_exlist[] = {
-/*
- *  if it wants to reduce effect enabled reg feautre to system,
- *  you must add these registers - mct, serial
- *  because they are called very often.
- *  physical address, size ex) {0x10C00000, 0x1000},
- */
-	{ESS_REG_MCT_ADDR, ESS_REG_MCT_SIZE},
-	{ESS_REG_UART_ADDR, ESS_REG_UART_SIZE},
-	{0, 0},
-	{0, 0},
-	{0, 0},
-	{0, 0},
-	{0, 0},
-	{0, 0},
-	{0, 0},
-};
-#endif
-
 #ifdef CONFIG_EXYNOS_SNAPSHOT_FREQ
 static char *ess_freq_name[] = {
 	"APL", "ATL", "INT", "MIF", "ISP", "DISP",
@@ -558,79 +483,6 @@ static struct exynos_ss_desc ess_desc;
 DEFINE_PER_CPU(struct pt_regs *, ess_core_reg);
 DEFINE_PER_CPU(struct exynos_ss_mmu_reg *, ess_mmu_reg);
 
-static void exynos_ss_save_mmu(struct exynos_ss_mmu_reg *mmu_reg)
-{
-	if (!exynos_ss_get_enable("log_kevents", true))
-		return;
-
-#ifdef CONFIG_ARM64
-	asm("mrs x1, SCTLR_EL1\n\t"		/* SCTLR_EL1 */
-	    "str x1, [%0]\n\t"
-	    "mrs x1, TTBR0_EL1\n\t"		/* TTBR0_EL1 */
-	    "str x1, [%0,#8]\n\t"
-	    "mrs x1, TTBR1_EL1\n\t"		/* TTBR1_EL1 */
-	    "str x1, [%0,#16]\n\t"
-	    "mrs x1, TCR_EL1\n\t"		/* TCR_EL1 */
-	    "str x1, [%0,#24]\n\t"
-	    "mrs x1, ESR_EL1\n\t"		/* ESR_EL1 */
-	    "str x1, [%0,#32]\n\t"
-	    "mrs x1, FAR_EL1\n\t"		/* FAR_EL1 */
-	    "str x1, [%0,#40]\n\t"
-	    /* Don't populate AFSR0_EL1 and AFSR1_EL1 */
-	    "mrs x1, CONTEXTIDR_EL1\n\t"	/* CONTEXTIDR_EL1 */
-	    "str x1, [%0,#48]\n\t"
-	    "mrs x1, TPIDR_EL0\n\t"		/* TPIDR_EL0 */
-	    "str x1, [%0,#56]\n\t"
-	    "mrs x1, TPIDRRO_EL0\n\t"		/* TPIDRRO_EL0 */
-	    "str x1, [%0,#64]\n\t"
-	    "mrs x1, TPIDR_EL1\n\t"		/* TPIDR_EL1 */
-	    "str x1, [%0,#72]\n\t"
-	    "mrs x1, MAIR_EL1\n\t"		/* MAIR_EL1 */
-	    "str x1, [%0,#80]\n\t" :		/* output */
-	    : "r"(mmu_reg)			/* input */
-	    : "%x1", "memory"			/* clobbered register */
-	);
-
-#else
-	asm("mrc    p15, 0, r1, c1, c0, 0\n\t"	/* SCTLR */
-	    "str r1, [%0]\n\t"
-	    "mrc    p15, 0, r1, c2, c0, 0\n\t"	/* TTBR0 */
-	    "str r1, [%0,#4]\n\t"
-	    "mrc    p15, 0, r1, c2, c0,1\n\t"	/* TTBR1 */
-	    "str r1, [%0,#8]\n\t"
-	    "mrc    p15, 0, r1, c2, c0,2\n\t"	/* TTBCR */
-	    "str r1, [%0,#12]\n\t"
-	    "mrc    p15, 0, r1, c3, c0,0\n\t"	/* DACR */
-	    "str r1, [%0,#16]\n\t"
-	    "mrc    p15, 0, r1, c5, c0,0\n\t"	/* DFSR */
-	    "str r1, [%0,#20]\n\t"
-	    "mrc    p15, 0, r1, c6, c0,0\n\t"	/* DFAR */
-	    "str r1, [%0,#24]\n\t"
-	    "mrc    p15, 0, r1, c5, c0,1\n\t"	/* IFSR */
-	    "str r1, [%0,#28]\n\t"
-	    "mrc    p15, 0, r1, c6, c0,2\n\t"	/* IFAR */
-	    "str r1, [%0,#32]\n\t"
-	    /* Don't populate DAFSR and RAFSR */
-	    "mrc    p15, 0, r1, c10, c2,0\n\t"	/* PMRRR */
-	    "str r1, [%0,#44]\n\t"
-	    "mrc    p15, 0, r1, c10, c2,1\n\t"	/* NMRRR */
-	    "str r1, [%0,#48]\n\t"
-	    "mrc    p15, 0, r1, c13, c0,0\n\t"	/* FCSEPID */
-	    "str r1, [%0,#52]\n\t"
-	    "mrc    p15, 0, r1, c13, c0,1\n\t"	/* CONTEXT */
-	    "str r1, [%0,#56]\n\t"
-	    "mrc    p15, 0, r1, c13, c0,2\n\t"	/* URWTPID */
-	    "str r1, [%0,#60]\n\t"
-	    "mrc    p15, 0, r1, c13, c0,3\n\t"	/* UROTPID */
-	    "str r1, [%0,#64]\n\t"
-	    "mrc    p15, 0, r1, c13, c0,4\n\t"	/* POTPIDR */
-	    "str r1, [%0,#68]\n\t" :		/* output */
-	    : "r"(mmu_reg)			/* input */
-	    : "%r1", "memory"			/* clobbered register */
-	);
-#endif
-}
-
 void __iomem *exynos_ss_get_base_vaddr(void)
 {
 	return (void __iomem *)(ess_base.vaddr);
@@ -639,29 +491,6 @@ void __iomem *exynos_ss_get_base_vaddr(void)
 void __iomem *exynos_ss_get_base_paddr(void)
 {
 	return (void __iomem *)(ess_base.paddr);
-}
-
-static void exynos_ss_core_power_stat(unsigned int val, unsigned cpu)
-{
-	if (exynos_ss_get_enable("log_kevents", true))
-		__raw_writel(val, (exynos_ss_get_base_vaddr() +
-					ESS_OFFSET_CORE_POWER_STAT + cpu * 4));
-}
-
-static unsigned int exynos_ss_get_core_panic_stat(unsigned cpu)
-{
-	if (exynos_ss_get_enable("log_kevents", true))
-		return __raw_readl(exynos_ss_get_base_vaddr() +
-					ESS_OFFSET_PANIC_STAT + cpu * 4);
-	else
-		return 0;
-}
-
-static void exynos_ss_set_core_panic_stat(unsigned int val, unsigned cpu)
-{
-	if (exynos_ss_get_enable("log_kevents", true))
-		__raw_writel(val, (exynos_ss_get_base_vaddr() +
-					ESS_OFFSET_PANIC_STAT + cpu * 4));
 }
 
 static void exynos_ss_scratch_reg(unsigned int val)
@@ -718,115 +547,10 @@ unsigned int exynos_ss_get_item_paddr(char* name)
 }
 EXPORT_SYMBOL(exynos_ss_get_item_paddr);
 
-int exynos_ss_get_hardlockup(void)
-{
-	return ess_desc.hardlockup;
-}
-EXPORT_SYMBOL(exynos_ss_get_hardlockup);
-
-int exynos_ss_set_hardlockup(int val)
-{
-	unsigned long flags;
-
-	if (unlikely(!ess_base.enabled))
-		return 0;
-
-	spin_lock_irqsave(&ess_desc.lock, flags);
-	ess_desc.hardlockup = val;
-	spin_unlock_irqrestore(&ess_desc.lock, flags);
-	return 0;
-}
-EXPORT_SYMBOL(exynos_ss_set_hardlockup);
-
-int exynos_ss_prepare_panic(void)
-{
-	unsigned cpu;
-
-	if (unlikely(!ess_base.enabled))
-		return 0;
-	/*
-	 * kick watchdog to prevent unexpected reset during panic sequence
-	 * and it prevents the hang during panic sequence by watchedog
-	 */
-	s3c2410wdt_keepalive_emergency();
-
-	for (cpu = 0; cpu < ESS_NR_CPUS; cpu++) {
-		if (exynos_cpu.power_state(cpu))
-			exynos_ss_core_power_stat(ESS_SIGN_ALIVE, cpu);
-		else
-			exynos_ss_core_power_stat(ESS_SIGN_DEAD, cpu);
-	}
-
-	if(exynos_check_hardlockup_reason()) {
-		/* no core got stucks in EL3 monitor */
-		pr_emerg("%s: no core got stucks in EL3" \
-				" monitor.\n", __func__);
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL(exynos_ss_prepare_panic);
-
-int exynos_ss_post_panic(void)
-{
-	if (ess_base.enabled) {
-		exynos_ss_dump_sfr();
-		exynos_ss_save_context(NULL);
-		flush_cache_all();
-#ifdef CONFIG_EXYNOS_SNAPSHOT_PANIC_REBOOT
-		if (!ess_desc.no_wdt_dev) {
-#ifdef CONFIG_EXYNOS_SNAPSHOT_WATCHDOG_RESET
-			if (ess_desc.hardlockup || num_online_cpus() > 1) {
-			/* for stall cpu */
-				while(1)
-				wfi();
-			}
-#endif
-		}
-#endif
-	}
-#ifdef CONFIG_SEC_DEBUG
-	hard_reset_delay();
-	sec_debug_post_panic_handler();
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_PANIC_REBOOT
-	arm_pm_restart(0, "panic");
-#endif
-	/* for stall cpu when not enabling panic reboot */
-	while(1)
-		wfi();
-
-	/* Never run this function */
-	pr_emerg("exynos-snapshot: %s DO NOT RUN this function (CPU:%d)\n",
-					__func__, raw_smp_processor_id());
-	return 0;
-}
-EXPORT_SYMBOL(exynos_ss_post_panic);
-
-int exynos_ss_dump_panic(char *str, size_t len)
-{
-	if (unlikely(!ess_base.enabled) ||
-		!exynos_ss_get_enable("log_kevents", true))
-		return 0;
-
-	/*  This function is only one which runs in panic funcion */
-	if (str && len && len < 1024)
-		memcpy(exynos_ss_get_base_vaddr() + ESS_OFFSET_PANIC_STRING, str, len);
-
-	return 0;
-}
-EXPORT_SYMBOL(exynos_ss_dump_panic);
-
 int exynos_ss_post_reboot(void)
 {
-	int cpu;
-
 	if (unlikely(!ess_base.enabled))
 		return 0;
-
-	/* clear ESS_SIGN_PANIC when normal reboot */
-	for (cpu = 0; cpu < ESS_NR_CPUS; cpu++)
-		exynos_ss_set_core_panic_stat(ESS_SIGN_RESET, cpu);
 
 #ifdef CONFIG_SEC_DEBUG
 	sec_debug_reboot_handler();
@@ -836,32 +560,6 @@ int exynos_ss_post_reboot(void)
 	return 0;
 }
 EXPORT_SYMBOL(exynos_ss_post_reboot);
-
-#ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
-
-unsigned long merr_symptom;
-
-#define L2MERR0SR	0
-#define TBWMERR0SR	1
-#define LSMERR0SR	2
-#define FEMERR0SR	3
-#define L2MERRSR	4
-#define CPUMERRSR	5
-
-#define FATAL_MASK_M	(BIT(1) | BIT(0))
-#define FATAL_MASK_A	(BIT(63) | BIT(31))
-
-#define hook_merr(merr, reg, mask)		\
-({						\
-	if ((reg & mask) == mask)		\
-		merr_symptom |= (1 << merr);	\
-})
-
-#else
-
-#define hook_merr(merr, reg, mask)	({})
-
-#endif
 
 int exynos_ss_dump(void)
 {
@@ -875,8 +573,6 @@ int exynos_ss_dump(void)
 		"mrs %1, S3_1_c15_c2_3\n"
 		: "=r" (reg1), "=r" (reg2));
 	pr_emerg("CPUMERRSR: %016lx, L2MERRSR: %016lx\n", reg1, reg2);
-	hook_merr(CPUMERRSR, reg1, FATAL_MASK_A);
-	hook_merr(L2MERRSR, reg2, FATAL_MASK_A);	
 #else
 	unsigned long reg0;
 	asm ("mrc p15, 0, %0, c0, c0, 0\n": "=r" (reg0));
@@ -951,36 +647,6 @@ int exynos_ss_save_reg(void *v_regs)
 	return 0;
 }
 EXPORT_SYMBOL(exynos_ss_save_reg);
-
-int exynos_ss_save_context(void *v_regs)
-{
-	unsigned long flags;
-	struct pt_regs *regs = (struct pt_regs *)v_regs;
-
-	if (unlikely(!ess_base.enabled))
-		return 0;
-
-	//exynos_trace_stop();
-
-	local_irq_save(flags);
-
-	/* If it was already saved the context information, it should be skipped */
-	if (exynos_ss_get_core_panic_stat(smp_processor_id()) !=  ESS_SIGN_PANIC) {
-		exynos_ss_save_mmu(per_cpu(ess_mmu_reg, smp_processor_id()));
-		exynos_ss_save_reg(regs);
-		exynos_ss_dump();
-		exynos_ss_set_core_panic_stat(ESS_SIGN_PANIC, smp_processor_id());
-		pr_emerg("exynos-snapshot: context saved(CPU:%d)\n",
-							smp_processor_id());
-	} else
-		pr_emerg("exynos-snapshot: skip context saved(CPU:%d)\n",
-							smp_processor_id());
-
-	flush_cache_all();
-	local_irq_restore(flags);
-	return 0;
-}
-EXPORT_SYMBOL(exynos_ss_save_context);
 
 int exynos_ss_set_enable(const char *name, int en)
 {
@@ -1075,13 +741,6 @@ static inline int exynos_ss_check_eob(struct exynos_ss_item *item,
 		return 0;
 }
 
-#ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
-void register_set_auto_comm_lastfreq(void (*func)(int type, int old_freq, int new_freq, u64 time))
-{
-	func_hook_auto_comm_lastfreq = func;
-}
-#endif
-
 #ifdef CONFIG_EXYNOS_SNAPSHOT_HOOK_LOGGER
 static inline void exynos_ss_hook_logger(const char *name,
 					 const char *buf, size_t size)
@@ -1123,9 +782,6 @@ static inline void exynos_ss_hook_logbuf(const char buf)
 	if (likely(ess_base.enabled == true && item->entry.enabled == true)) {
 		if (exynos_ss_check_eob(item, 1)) {
 			item->curr_ptr = item->head_ptr;
-#ifdef CONFIG_SEC_PM_DEBUG
-			sec_log_full = true;
-#endif
 			*((unsigned long long *)(item->head_ptr + item->entry.size - (size_t)0x08)) = SEC_LKMSG_MAGICKEY;
 		}
 
@@ -1148,9 +804,6 @@ static inline void exynos_ss_hook_logbuf(const char *buf, size_t size)
 
 		if (exynos_ss_check_eob(item, size)) {
 			item->curr_ptr = item->head_ptr;
-#ifdef CONFIG_SEC_PM_DEBUG
-			sec_log_full = true;
-#endif
 			*((unsigned long long *)(item->head_ptr + item->entry.size - (size_t)0x08)) = SEC_LKMSG_MAGICKEY;
 		}
 
@@ -1164,105 +817,6 @@ static inline void exynos_ss_hook_logbuf(const char *buf, size_t size)
 	}
 }
 #endif
-
-static void exynos_ss_dump_one_task_info(struct task_struct *tsk, bool is_main)
-{
-	char state_array[] = {'R', 'S', 'D', 'T', 't', 'Z', 'X', 'x', 'K', 'W'};
-	unsigned char idx = 0;
-	unsigned int state = (tsk->state & TASK_REPORT) | tsk->exit_state;
-	unsigned long wchan;
-	unsigned long pc = 0;
-	char symname[KSYM_NAME_LEN];
-	int permitted;
-	struct mm_struct *mm;
-
-	permitted = ptrace_may_access(tsk, PTRACE_MODE_READ);
-	mm = get_task_mm(tsk);
-	if (mm) {
-		if (permitted)
-			pc = KSTK_EIP(tsk);
-	}
-
-	wchan = get_wchan(tsk);
-	if (lookup_symbol_name(wchan, symname) < 0) {
-		if (!ptrace_may_access(tsk, PTRACE_MODE_READ))
-			snprintf(symname, KSYM_NAME_LEN,  "_____");
-		else
-			snprintf(symname, KSYM_NAME_LEN, "%lu", wchan);
-	}
-
-	while (state) {
-		idx++;
-		state >>= 1;
-	}
-
-	/*
-	 * kick watchdog to prevent unexpected reset during panic sequence
-	 * and it prevents the hang during panic sequence by watchedog
-	 */
-	touch_softlockup_watchdog();
-	s3c2410wdt_keepalive_emergency();
-
-	pr_info("%8d %8d %8d %16lld %c(%d) %3d  %16zx %16zx  %16zx %c %16s [%s]\n",
-			tsk->pid, (int)(tsk->utime), (int)(tsk->stime),
-			tsk->se.exec_start, state_array[idx], (int)(tsk->state),
-			task_cpu(tsk), wchan, pc, (unsigned long)tsk,
-			is_main ? '*' : ' ', tsk->comm, symname);
-
-	if (tsk->state == TASK_RUNNING
-			|| tsk->state == TASK_UNINTERRUPTIBLE
-			|| tsk->mm == NULL) {
-		print_worker_info(KERN_INFO, tsk);
-		show_stack(tsk, NULL);
-		pr_info("\n");
-	}
-}
-
-static inline struct task_struct *get_next_thread(struct task_struct *tsk)
-{
-	return container_of(tsk->thread_group.next,
-				struct task_struct,
-				thread_group);
-}
-
-static void exynos_ss_dump_task_info(void)
-{
-	struct task_struct *frst_tsk;
-	struct task_struct *curr_tsk;
-	struct task_struct *frst_thr;
-	struct task_struct *curr_thr;
-
-	pr_info("\n");
-	pr_info(" current proc : %d %s\n", current->pid, current->comm);
-	pr_info(" ----------------------------------------------------------------------------------------------------------------------------\n");
-	pr_info("     pid      uTime    sTime      exec(ns)  stat  cpu       wchan           user_pc        task_struct       comm   sym_wchan\n");
-	pr_info(" ----------------------------------------------------------------------------------------------------------------------------\n");
-
-	/* processes */
-	frst_tsk = &init_task;
-	curr_tsk = frst_tsk;
-	while (curr_tsk != NULL) {
-		exynos_ss_dump_one_task_info(curr_tsk,  true);
-		/* threads */
-		if (curr_tsk->thread_group.next != NULL) {
-			frst_thr = get_next_thread(curr_tsk);
-			curr_thr = frst_thr;
-			if (frst_thr != curr_tsk) {
-				while (curr_thr != NULL) {
-					exynos_ss_dump_one_task_info(curr_thr, false);
-					curr_thr = get_next_thread(curr_thr);
-					if (curr_thr == curr_tsk)
-						break;
-				}
-			}
-		}
-		curr_tsk = container_of(curr_tsk->tasks.next,
-					struct task_struct, tasks);
-		if (curr_tsk == frst_tsk)
-			break;
-	}
-	pr_info(" ----------------------------------------------------------------------------------------------------------------------------\n");
-}
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_SFRDUMP
 void exynos_ss_dump_sfr(void)
@@ -1461,7 +1015,6 @@ static int exynos_ss_reboot_handler(struct notifier_block *nb,
 	pr_emerg("exynos-snapshot: normal reboot [%s]\n", __func__);
 	exynos_ss_report_reason(ESS_SIGN_NORMAL_REBOOT);
 	exynos_ss_scratch_reg(ESS_SIGN_RESET);
-	exynos_ss_save_context(NULL);
 #ifdef CONFIG_SEC_DEBUG
 	sec_debug_reboot_handler();
 #endif
@@ -1470,58 +1023,9 @@ static int exynos_ss_reboot_handler(struct notifier_block *nb,
 	return 0;
 }
 
-static int exynos_ss_panic_handler(struct notifier_block *nb,
-				   unsigned long l, void *buf)
-{
-	if (unlikely(!ess_base.enabled))
-		return 0;
-
-#ifdef CONFIG_EXYNOS_SNAPSHOT_PANIC_REBOOT
-	local_irq_disable();
-	exynos_ss_report_reason(ESS_SIGN_PANIC);
-	pr_emerg("exynos-snapshot: panic - reboot[%s]\n", __func__);
-	exynos_ss_dump_task_info();
-#ifdef CONFIG_EXYNOS_CORESIGHT_PC_INFO
-	if (exynos_ss_get_enable("log_kevents", true))
-		memcpy(ess_log->core, exynos_cs_pc, sizeof(ess_log->core));
-#endif
-	flush_cache_all();
-#else
-	exynos_ss_report_reason(ESS_SIGN_PANIC);
-	pr_emerg("exynos-snapshot: panic - normal[%s]\n", __func__);
-	exynos_ss_dump_task_info();
-	flush_cache_all();
-#endif
-#ifdef CONFIG_SEC_DEBUG
-	sec_debug_panic_handler(buf, true);
-#endif
-	return 0;
-}
-
 static struct notifier_block nb_reboot_block = {
 	.notifier_call = exynos_ss_reboot_handler
 };
-
-static struct notifier_block nb_panic_block = {
-	.notifier_call = exynos_ss_panic_handler,
-};
-
-void exynos_ss_panic_handler_safe(struct pt_regs *regs)
-{
-	char text[1024];
-	size_t len;
-
-	if (unlikely(!ess_base.enabled))
-		return;
-
-	snprintf(text, 1024, "safe panic handler at cpu %d", (int)raw_smp_processor_id());
-	len = (size_t)strnlen(text, 1024);
-
-	exynos_ss_report_reason(ESS_SIGN_SAFE_FAULT);
-	exynos_ss_dump_panic(text, len);
-	s3c2410wdt_set_emergency_reset(100);
-
-}
 
 static size_t __init exynos_ss_remap(void)
 {
@@ -1762,9 +1266,6 @@ static void __init exynos_ss_fixmap_header(void)
 	atomic_set(&(ess_idx.printk_log_idx), -1);
 	atomic_set(&(ess_idx.printkl_log_idx), -1);
 #endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-	atomic_set(&(ess_idx.regulator_log_idx), -1);
-#endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
 	atomic_set(&(ess_idx.thermal_log_idx), -1);
 #endif
@@ -1794,9 +1295,6 @@ static void __init exynos_ss_fixmap_header(void)
 #endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_IRQ_EXIT
 		atomic_set(&(ess_idx.irq_exit_log_idx[i]), -1);
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-		atomic_set(&(ess_idx.reg_log_idx[i]), -1);
 #endif
 #ifdef CONFIG_EXYNOS_SNAPSHOT_HRTIMER
 		atomic_set(&(ess_idx.hrtimer_log_idx[i]), -1);
@@ -1932,7 +1430,6 @@ static int __init exynos_ss_init(void)
 #endif
 #endif
 		register_reboot_notifier(&nb_reboot_block);
-		atomic_notifier_chain_register(&panic_notifier_list, &nb_panic_block);
 	} else
 		pr_err("exynos-snapshot: %s failed\n", __func__);
 
@@ -2013,30 +1510,6 @@ void exynos_ss_suspend(void *fn, void *dev, int en)
 		ess_log->suspend[cpu][i].en = en;
 	}
 }
-
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REGULATOR
-void exynos_ss_regulator(char* f_name, unsigned int addr, unsigned int volt, int en)
-{
-	struct exynos_ss_item *item = &ess_items[ess_desc.kevents_num];
-
-	if (unlikely(!ess_base.enabled || !item->entry.enabled || !item->entry.enabled_init))
-		return;
-	{
-		int cpu = raw_smp_processor_id();
-		unsigned long i = atomic_inc_return(&ess_idx.regulator_log_idx) &
-				(ARRAY_SIZE(ess_log->regulator) - 1);
-		int size = strlen(f_name);
-		if (size >= SZ_16)
-			size = SZ_16 - 1;
-		ess_log->regulator[i].time = cpu_clock(cpu);
-		ess_log->regulator[i].cpu = cpu;
-		strncpy(ess_log->regulator[i].name, f_name, size);
-		ess_log->regulator[i].reg = addr;
-		ess_log->regulator[i].en = en;
-		ess_log->regulator[i].voltage = volt;
-	}
-}
-#endif
 
 #ifdef CONFIG_EXYNOS_SNAPSHOT_THERMAL
 void exynos_ss_thermal(void *data, unsigned int temp, char *name, unsigned int max_cooling)
@@ -2308,10 +1781,6 @@ void exynos_ss_freq(int type, unsigned long old_freq, unsigned long target_freq,
 		ess_log->freq[i].old_freq = old_freq;
 		ess_log->freq[i].target_freq = target_freq;
 		ess_log->freq[i].en = en;
-#ifdef CONFIG_SEC_DEBUG_AUTO_SUMMARY
-		if(func_hook_auto_comm_lastfreq && en == ESS_FLAG_OUT)
-			func_hook_auto_comm_lastfreq(type, old_freq, target_freq, ess_log->freq[i].time);
-#endif
 	}
 }
 #endif
@@ -2354,84 +1823,6 @@ void exynos_ss_hrtimer(void *timer, s64 *now, void *fn, int en)
 		ess_log->hrtimers[cpu][i].timer = (struct hrtimer *)timer;
 		ess_log->hrtimers[cpu][i].fn = fn;
 		ess_log->hrtimers[cpu][i].en = en;
-	}
-}
-#endif
-
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-static phys_addr_t virt_to_phys_high(size_t vaddr)
-{
-	phys_addr_t paddr = 0;
-	pgd_t *pgd;
-	pmd_t *pmd;
-	pte_t *pte;
-
-	if (virt_addr_valid((void *) vaddr)) {
-		paddr = virt_to_phys((void *) vaddr);
-		goto out;
-	}
-
-	pgd = pgd_offset_k(vaddr);
-	if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
-		goto out;
-
-	if (pgd_val(*pgd) & 2) {
-		paddr = pgd_val(*pgd) & SECTION_MASK;
-		goto out;
-	}
-
-	pmd = pmd_offset((pud_t *)pgd, vaddr);
-	if (pmd_none_or_clear_bad(pmd))
-		goto out;
-
-	pte = pte_offset_kernel(pmd, vaddr);
-	if (pte_none(*pte))
-		goto out;
-
-	paddr = pte_val(*pte) & PAGE_MASK;
-
-out:
-	return paddr | (vaddr & UL(SZ_4K - 1));
-}
-
-void exynos_ss_reg(unsigned int read, size_t val, size_t reg, int en)
-{
-	struct exynos_ss_item *item = &ess_items[ess_desc.kevents_num];
-	int cpu = raw_smp_processor_id();
-	unsigned long i, j;
-	size_t phys_reg, start_addr, end_addr;
-
-	if (unlikely(!ess_base.enabled || !item->entry.enabled || !item->entry.enabled_init))
-		return;
-
-	if (ess_reg_exlist[0].addr == 0)
-		return;
-
-	phys_reg = virt_to_phys_high(reg);
-	if (unlikely(!phys_reg))
-		return;
-
-	for (j = 0; j < ARRAY_SIZE(ess_reg_exlist); j++) {
-		if (ess_reg_exlist[j].addr == 0)
-			break;
-		start_addr = ess_reg_exlist[j].addr;
-		end_addr = start_addr + ess_reg_exlist[j].size;
-		if (start_addr <= phys_reg && phys_reg <= end_addr)
-			return;
-	}
-
-	i = atomic_inc_return(&ess_idx.reg_log_idx[cpu]) &
-		(ARRAY_SIZE(ess_log->reg[0]) - 1);
-
-	ess_log->reg[cpu][i].time = cpu_clock(cpu);
-	ess_log->reg[cpu][i].read = read;
-	ess_log->reg[cpu][i].val = val;
-	ess_log->reg[cpu][i].reg = phys_reg;
-	ess_log->reg[cpu][i].en = en;
-
-	for (j = 0; j < ess_desc.callstack; j++) {
-		ess_log->reg[cpu][i].caller[j] =
-			(void *)((size_t)return_address(j + 1));
 	}
 }
 #endif
@@ -3370,46 +2761,6 @@ static ssize_t ess_irqexit_threshold_store(struct kobject *kobj,
 }
 #endif
 
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-static ssize_t ess_reg_exlist_show(struct kobject *kobj,
-			         struct kobj_attribute *attr, char *buf)
-{
-	unsigned long i;
-	ssize_t n = 0;
-
-	n = scnprintf(buf, 36, "excluded register address\n");
-	for (i = 0; i < ARRAY_SIZE(ess_reg_exlist); i++) {
-		if (ess_reg_exlist[i].addr == 0)
-			break;
-		n += scnprintf(buf + n, 40, "register addr: %08zx size: %08zx\n",
-				ess_reg_exlist[i].addr, ess_reg_exlist[i].size);
-        }
-	return n;
-}
-
-static ssize_t ess_reg_exlist_store(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				const char *buf, size_t count)
-{
-	unsigned long i;
-	size_t addr;
-
-	addr = simple_strtoul(buf, NULL, 0);
-	pr_info("register addr: %zx\n", addr);
-
-	for (i = 0; i < ARRAY_SIZE(ess_reg_exlist); i++) {
-		if (ess_reg_exlist[i].addr == 0)
-			break;
-	}
-	if (addr != 0) {
-		ess_reg_exlist[i].size = SZ_4K;
-		ess_reg_exlist[i].addr = addr;
-		pr_info("success %zx to threshold\n", (addr));
-	}
-	return count;
-}
-#endif
-
 static struct kobj_attribute ess_enable_attr =
         __ATTR(enabled, 0644, ess_enable_show, ess_enable_store);
 static struct kobj_attribute ess_callstack_attr =
@@ -3425,10 +2776,6 @@ static struct kobj_attribute ess_irqexit_threshold_attr =
         __ATTR(threshold_irqexit, 0644, ess_irqexit_threshold_show,
 					ess_irqexit_threshold_store);
 #endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-static struct kobj_attribute ess_reg_attr =
-        __ATTR(exlist_reg, 0644, ess_reg_exlist_show, ess_reg_exlist_store);
-#endif
 
 static struct attribute *ess_sysfs_attrs[] = {
 	&ess_enable_attr.attr,
@@ -3437,9 +2784,6 @@ static struct attribute *ess_sysfs_attrs[] = {
 #ifdef CONFIG_EXYNOS_SNAPSHOT_IRQ_EXIT
 	&ess_irqexit_attr.attr,
 	&ess_irqexit_threshold_attr.attr,
-#endif
-#ifdef CONFIG_EXYNOS_SNAPSHOT_REG
-	&ess_reg_attr.attr,
 #endif
 	NULL,
 };
@@ -3464,62 +2808,6 @@ static int __init exynos_ss_sysfs_init(void)
 	return ret;
 }
 late_initcall(exynos_ss_sysfs_init);
-
-#ifdef CONFIG_SEC_PM_DEBUG
-static ssize_t sec_log_read_all(struct file *file, char __user *buf,
-				size_t len, loff_t *offset)
-{
-	loff_t pos = *offset;
-	ssize_t count;
-	size_t size;
-	struct exynos_ss_item *item = &ess_items[ess_desc.log_kernel_num];
-
-	if (sec_log_full)
-		size = item->entry.size;
-	else
-		size = (size_t)(item->curr_ptr - item->head_ptr);
-
-	if (pos >= size)
-		return 0;
-
-	count = min(len, size);
-
-	if ((pos + count) > size)
-		count = size - pos;
-
-	if (copy_to_user(buf, item->head_ptr + pos, count))
-		return -EFAULT;
-
-	*offset += count;
-	return count;
-}
-
-static const struct file_operations sec_log_file_ops = {
-	.owner = THIS_MODULE,
-	.read = sec_log_read_all,
-};
-
-static int __init sec_log_late_init(void)
-{
-	struct proc_dir_entry *entry;
-	struct exynos_ss_item *item = &ess_items[ess_desc.log_kernel_num];
-
-	if (!item->head_ptr)
-		return 0;
-
-	entry = proc_create("sec_log", S_IRUSR | S_IRGRP, NULL, &sec_log_file_ops);
-	if (!entry) {
-		pr_err("%s: failed to create proc entry\n", __func__);
-		return 0;
-	}
-
-	proc_set_size(entry, item->entry.size);
-
-	return 0;
-}
-
-late_initcall(sec_log_late_init);
-#endif
 
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP) && defined(CONFIG_EXYNOS_SNAPSHOT_SAVE_SLUGGISHINFO)
 static int schedinfo_proc_show(struct seq_file *m, void *v)

@@ -998,8 +998,7 @@ static int pxa25x_udc_vbus_draw(struct usb_gadget *_gadget, unsigned mA)
 
 static int pxa25x_udc_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
-static int pxa25x_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver);
+static int pxa25x_udc_stop(struct usb_gadget *g);
 
 static const struct usb_gadget_ops pxa25x_udc_ops = {
 	.get_frame	= pxa25x_udc_get_frame,
@@ -1181,6 +1180,7 @@ static void udc_reinit(struct pxa25x_udc *dev)
 	INIT_LIST_HEAD (&dev->gadget.ep_list);
 	INIT_LIST_HEAD (&dev->gadget.ep0->ep_list);
 	dev->ep0state = EP0_IDLE;
+	dev->gadget.quirk_altset_not_supp = 1;
 
 	/* basic endpoint records init */
 	for (i = 0; i < PXA_UDC_NUM_ENDPOINTS; i++) {
@@ -1311,8 +1311,7 @@ stop_activity(struct pxa25x_udc *dev, struct usb_gadget_driver *driver)
 	udc_reinit(dev);
 }
 
-static int pxa25x_udc_stop(struct usb_gadget*g,
-		struct usb_gadget_driver *driver)
+static int pxa25x_udc_stop(struct usb_gadget*g)
 {
 	struct pxa25x_udc	*dev = to_pxa25x(g);
 

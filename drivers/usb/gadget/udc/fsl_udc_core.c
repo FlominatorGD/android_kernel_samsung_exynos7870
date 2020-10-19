@@ -1236,9 +1236,8 @@ static int fsl_pullup(struct usb_gadget *gadget, int is_on)
 
 static int fsl_udc_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
-static int fsl_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver);
-/* defined in gadget.h */
+static int fsl_udc_stop(struct usb_gadget *g);
+
 static const struct usb_gadget_ops fsl_gadget_ops = {
 	.get_frame = fsl_get_frame,
 	.wakeup = fsl_wakeup,
@@ -1249,6 +1248,12 @@ static const struct usb_gadget_ops fsl_gadget_ops = {
 	.udc_start = fsl_udc_start,
 	.udc_stop = fsl_udc_stop,
 };
+
+/*
+ * Empty complete function used by this driver to fill in the req->complete
+ * field when creating a request since the complete field is mandatory.
+ */
+static void fsl_noop_complete(struct usb_ep *ep, struct usb_request *req) { }
 
 /* Set protocol stall on ep0, protocol stall will automatically be cleared
    on new transaction */
@@ -1284,7 +1289,7 @@ static int ep0_prime_status(struct fsl_udc *udc, int direction)
 	req->req.length = 0;
 	req->req.status = -EINPROGRESS;
 	req->req.actual = 0;
-	req->req.complete = NULL;
+	req->req.complete = fsl_noop_complete;
 	req->dtd_count = 0;
 
 	ret = usb_gadget_map_request(&ep->udc->gadget, &req->req, ep_is_in(ep));
@@ -1367,7 +1372,7 @@ static void ch9getstatus(struct fsl_udc *udc, u8 request_type, u16 value,
 	req->req.length = 2;
 	req->req.status = -EINPROGRESS;
 	req->req.actual = 0;
-	req->req.complete = NULL;
+	req->req.complete = fsl_noop_complete;
 	req->dtd_count = 0;
 
 	ret = usb_gadget_map_request(&ep->udc->gadget, &req->req, ep_is_in(ep));
@@ -1975,8 +1980,7 @@ static int fsl_udc_start(struct usb_gadget *g,
 }
 
 /* Disconnect from gadget driver */
-static int fsl_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver)
+static int fsl_udc_stop(struct usb_gadget *g)
 {
 	struct fsl_ep *loop_ep;
 	unsigned long flags;
@@ -2549,7 +2553,7 @@ static int __exit fsl_udc_remove(struct platform_device *pdev)
 	dma_pool_destroy(udc_controller->td_pool);
 	free_irq(udc_controller->irq, udc_controller);
 	iounmap(dr_regs);
-	if (pdata->operating_mode == FSL_USB2_DR_DEVICE)
+	if (res && (pdata->operating_mode == FSL_USB2_DR_DEVICE))
 		release_mem_region(res->start, resource_size(res));
 
 	/* free udc --wait for the release() finished */

@@ -273,23 +273,24 @@ static void uart_copy_to_local_buf(int dir, struct uart_local_buf* local_buf,
 static ssize_t
 uart_error_cnt_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	int ret=0;
+	int ret = 0;
 	struct s3c24xx_uart_port *ourport;
-	sprintf(buf, "000 000 000 000\n");//init buf : overrun parity frame break count
 
-	list_for_each_entry(ourport, &drvdata_list, node){ 
-	struct uart_port *port = &ourport->port;
-	
-	if (&ourport->pdev->dev != dev)
-		continue;
+	sprintf(buf, "000 000 000 000\n"); /* init buf : overrun parity frame break count */
 
-	ret = sprintf(buf, "%03x %03x %03x %03x\n", port->icount.overrun, 0, port->icount.frame, port->icount.brk);
+	list_for_each_entry(ourport, &drvdata_list, node) {
+		struct uart_port *port = &ourport->port;
 
+		if (&ourport->pdev->dev != dev)
+			continue;
+
+		ret = sprintf(buf, "%03x %03x %03x %03x\n", port->icount.overrun, 0, port->icount.frame, port->icount.brk);
 	}
+
 	return ret;
 }
 
-static DEVICE_ATTR(error_cnt, 0664, uart_error_cnt_show, NULL);
+static DEVICE_ATTR(error_cnt, 0440, uart_error_cnt_show, NULL);
 
 static void s3c24xx_serial_resetport(struct uart_port *port,
 				   struct s3c2410_uartcfg *cfg);
@@ -988,14 +989,14 @@ static unsigned int s3c24xx_serial_getclk(struct s3c24xx_uart_port *ourport,
 	struct s3c24xx_uart_info *info = ourport->info;
 	struct clk *clk;
 	unsigned long rate;
-	unsigned int cnt, baud, quot, clk_sel, best_quot = 0;
+	unsigned int cnt, baud, quot, best_quot = 0;
 	char clkname[MAX_CLK_NAME_LENGTH];
 	int calc_deviation, deviation = (1 << 30) - 1;
 
-	clk_sel = (ourport->cfg->clk_sel) ? ourport->cfg->clk_sel :
-			ourport->info->def_clk_sel;
 	for (cnt = 0; cnt < info->num_clks; cnt++) {
-		if (!(clk_sel & (1 << cnt)))
+		/* Keep selected clock if provided */
+		if (ourport->cfg->clk_sel &&
+			!(ourport->cfg->clk_sel & (1 << cnt)))
 			continue;
 
 		snprintf(clkname, sizeof(clkname), "sclk_uart%d", ourport->port.line);
@@ -1542,9 +1543,11 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 		ourport->tx_irq = ret + 1;
 	}
 
-	ret = platform_get_irq(platdev, 1);
-	if (ret > 0)
-		ourport->tx_irq = ret;
+	if (!s3c24xx_serial_has_interrupt_mask(port)) {
+		ret = platform_get_irq(platdev, 1);
+		if (ret > 0)
+			ourport->tx_irq = ret;
+	}
 
 #if defined(CONFIG_PM_RUNTIME) && defined(CONFIG_SND_SAMSUNG_AUDSS)
 	if (ourport->domain == DOMAIN_AUD)
@@ -1866,8 +1869,6 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	probe_index++;
-
 	dbg("%s: initialising port %p...\n", __func__, ourport);
 
 #ifdef CONFIG_ARM_EXYNOS_DEVFREQ
@@ -1931,28 +1932,28 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
         if (ourport->uart_logging == 1) {
             /* Allocate memory for UART logging */
             ourport->uart_local_buf.buffer = kzalloc(LOG_BUFFER_SIZE, GFP_KERNEL);
-    
+
             if (!ourport->uart_local_buf.buffer)
                 dev_err(&pdev->dev, "could not allocate buffer for UART logging\n");
-    
+
             ourport->uart_local_buf.size = LOG_BUFFER_SIZE;
             ourport->uart_local_buf.index = 0;
 #ifdef SERIAL_UART_TRACE
                     if (port_index == SERIAL_UART_PORT_LINE) {
                         struct proc_dir_entry *ent;
-            
+
                         serial_dir = proc_mkdir("serial", NULL);
                         if (serial_dir == NULL) {
                             pr_err("Unable to create /proc/serial directory\n");
                             return -ENOMEM;
                         }
-            
+
                         serial_log_dir = proc_mkdir("uart", serial_dir);
                         if (serial_log_dir == NULL) {
                             pr_err("Unable to create /proc/serial/uart directory\n");
                             return -ENOMEM;
                         }
-                    
+
                         ent = proc_create("log", 0444, serial_log_dir, &proc_fops_serial_log);
                         if (ent == NULL) {
                             pr_err("Unable to create /proc/%s/log entry\n", PROC_SERIAL_DIR);
@@ -2016,6 +2017,8 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to create sysfs file.\n");
 
 	ourport->dbg_mode = 0;
+
+	probe_index++;
 
 	return 0;
 }

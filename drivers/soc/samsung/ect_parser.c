@@ -527,8 +527,6 @@ static int ect_parse_ap_thermal_function(int parser_version, void *address, stru
 		ect_parse_integer(&address, &range->lower_bound_temperature);
 		ect_parse_integer(&address, &range->upper_bound_temperature);
 		ect_parse_integer(&address, &range->max_frequency);
-		if (range->max_frequency == 1586000)
-			range->max_frequency = 1690000;
 		ect_parse_integer(&address, &range->sw_trip);
 		ect_parse_integer(&address, &range->flag);
 	}
@@ -975,8 +973,8 @@ static void ect_present_test_data(char *version)
 
 	pr_info("========================================\n");
 	pr_info("=\n");
-	pr_info("= [ECT] current version is TEST VERSION!!\n");
-	pr_info("= Please be aware that error can be happen.\n");
+	pr_info("= [ECT] the current version is a test version!\n");
+	pr_info("= Please be aware that errors can occur.\n");
 	pr_info("= [VERSION] : %c%c%c%c\n", version[0], version[1], version[2], version[3]);
 	pr_info("=\n");
 	pr_info("========================================\n");
@@ -1765,7 +1763,7 @@ static int ect_dump_init(void)
 
 	root = debugfs_create_dir("ect", NULL);
 	if (!root) {
-		pr_err("%s: couln't create debugfs\n", __FILE__);
+		pr_err("%s: couldn't create debugfs directory\n", __FILE__);
 		return -ENOMEM;
 	}
 
@@ -2058,7 +2056,7 @@ struct ect_bin *ect_binary_get_bin(void *block, char *binary_name)
 	return NULL;
 }
 
-int ect_parse_binary_header(void)
+int __init ect_parse_binary_header(void)
 {
 	int ret = 0;
 	int i, j;
@@ -2148,7 +2146,7 @@ void __init ect_init_map_io(void)
 
 	ret = map_vm_area(&ect_early_vm, PAGE_KERNEL, pages);
 	if (ret) {
-		pr_err("[ECT] : failed to mapping va and pa(%d)\n", ret);
+		pr_err("[ECT] : failed to map va and pa(%d)\n", ret);
 	}
 	kfree(pages);
 }

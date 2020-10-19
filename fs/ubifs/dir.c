@@ -108,8 +108,6 @@ struct inode *ubifs_new_inode(struct ubifs_info *c, const struct inode *dir,
 	inode->i_mtime = inode->i_atime = inode->i_ctime =
 			 ubifs_current_time(inode);
 	inode->i_mapping->nrpages = 0;
-	/* Disable readahead */
-	inode->i_mapping->backing_dev_info = &c->bdi;
 
 	switch (mode & S_IFMT) {
 	case S_IFREG:
@@ -347,7 +345,7 @@ static unsigned int vfs_dent_type(uint8_t type)
  */
 static int ubifs_readdir(struct file *file, struct dir_context *ctx)
 {
-	int err;
+	int err = 0;
 	struct qstr nm;
 	union ubifs_key key;
 	struct ubifs_dent_node *dent;
@@ -446,16 +444,21 @@ static int ubifs_readdir(struct file *file, struct dir_context *ctx)
 	}
 
 out:
-	if (err != -ENOENT) {
+	if (err != -ENOENT)
 		ubifs_err("cannot find next direntry, error %d", err);
-		return err;
-	}
+	else
+		/*
+		 * -ENOENT is a non-fatal error in this context, the TNC uses
+		 * it to indicate that the cursor moved past the current directory
+		 * and readdir() has to stop.
+		 */
+		err = 0;
 
 	kfree(file->private_data);
 	file->private_data = NULL;
 	/* 2 is a special value indicating that there are no more direntries */
 	ctx->pos = 2;
-	return 0;
+	return err;
 }
 
 /* Free saved readdir() state when the directory is closed */

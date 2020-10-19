@@ -5316,7 +5316,7 @@ tSirRetStatus limSendAddBARsp( tpAniSirGlobal pMac,
    else
       return eSIR_SUCCESS;
 
-      returnAfterError:
+returnAfterError:
 
       // Release buffer, if allocated
       if( NULL != pAddBARspBuffer )
@@ -5499,7 +5499,7 @@ tSirRetStatus limSendDelBAInd( tpAniSirGlobal pMac,
     else
       return eSIR_SUCCESS;
 
-      returnAfterError:
+returnAfterError:
 
       // Release buffer, if allocated
       if( NULL != pDelBAIndBuffer )

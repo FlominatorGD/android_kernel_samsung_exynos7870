@@ -194,7 +194,7 @@ static int exynos_irq_request_resources(struct irq_data *irqd)
 	unsigned int con;
 	int ret;
 
-	ret = gpio_lock_as_irq(&bank->gpio_chip, irqd->hwirq);
+	ret = gpiochip_lock_as_irq(&bank->gpio_chip, irqd->hwirq);
 	if (ret) {
 		dev_err(bank->gpio_chip.dev, "unable to lock pin %s-%lu IRQ\n",
 			bank->name, irqd->hwirq);
@@ -243,7 +243,7 @@ static void exynos_irq_release_resources(struct irq_data *irqd)
 
 	spin_unlock_irqrestore(&bank->slock, flags);
 
-	gpio_unlock_as_irq(&bank->gpio_chip, irqd->hwirq);
+	gpiochip_unlock_as_irq(&bank->gpio_chip, irqd->hwirq);
 }
 
 /*
@@ -270,7 +270,7 @@ static int exynos_gpio_irq_map(struct irq_domain *h, unsigned int virq,
 	struct samsung_pin_bank *b = h->host_data;
 
 	irq_set_chip_data(virq, b);
-	irq_set_chip_and_handler(virq, &exynos_gpio_irq_chip.chip,
+	irq_set_chip_and_handler(virq, &b->irq_chip->chip,
 					handle_level_irq);
 	set_irq_flags(virq, IRQF_VALID);
 	return 0;
@@ -310,6 +310,7 @@ struct exynos_eint_gpio_save {
 	u32 eint_con;
 	u32 eint_fltcon0;
 	u32 eint_fltcon1;
+	u32 eint_mask;
 };
 
 static void exynos_eint_flt_config(int en, int sel, int width,
@@ -383,6 +384,9 @@ static int exynos_eint_gpio_init(struct samsung_pinctrl_drv_data *d)
 			ret = -ENOMEM;
 			goto err_domains;
 		}
+
+		bank->irq_chip = &exynos_gpio_irq_chip;
+
 		/* Setting Digital Filter */
 		exynos_eint_flt_config(EXYNOS_EINT_FLTCON_EN,
 					EXYNOS_EINT_FLTCON_SEL, 0, d, bank);
@@ -487,9 +491,9 @@ static void exynos_irq_demux_eint16_31(unsigned int irq, struct irq_desc *desc)
 
 	for (i = 0; i < eintd->nr_banks; ++i) {
 		struct samsung_pin_bank *b = eintd->banks[i];
-		pend = readl(d->virt_base + EXYNOS_GPIO_EPEND_OFFSET
+		pend = readl(d->virt_base + b->irq_chip->eint_pend
 				+ b->eint_offset);
-		mask = readl(d->virt_base + EXYNOS_GPIO_EMASK_OFFSET
+		mask = readl(d->virt_base + b->irq_chip->eint_mask
 				+ b->eint_offset);
 		exynos_irq_demux_eint(pend & ~mask, b->irq_domain);
 	}
@@ -500,7 +504,9 @@ static void exynos_irq_demux_eint16_31(unsigned int irq, struct irq_desc *desc)
 static int exynos_wkup_irq_map(struct irq_domain *h, unsigned int virq,
 					irq_hw_number_t hw)
 {
-	irq_set_chip_and_handler(virq, &exynos_wkup_irq_chip.chip,
+	struct samsung_pin_bank *b = h->host_data;
+
+	irq_set_chip_and_handler(virq, &b->irq_chip->chip,
 					handle_level_irq);
 	irq_set_chip_data(virq, h->host_data);
 	set_irq_flags(virq, IRQF_VALID);
@@ -555,6 +561,8 @@ static int exynos_eint_wkup_init(struct samsung_pinctrl_drv_data *d)
 			dev_err(dev, "wkup irq domain add failed\n");
 			return -ENXIO;
 		}
+
+		bank->irq_chip = &exynos_wkup_irq_chip;
 
 		if (!of_find_property(bank->of_node, "interrupts", NULL)) {
 			bank->eint_type = EINT_TYPE_WKUP_MUX;
@@ -628,10 +636,13 @@ static void exynos_pinctrl_suspend_bank(
 						+ 2 * bank->eint_offset);
 	save->eint_fltcon1 = readl(regs + EXYNOS_GPIO_EFLTCON_OFFSET
 						+ 2 * bank->eint_offset + 4);
+	save->eint_mask = readl(regs + bank->irq_chip->eint_mask
+						+ bank->eint_offset);
 
 	pr_debug("%s: save     con %#010x\n", bank->name, save->eint_con);
 	pr_debug("%s: save fltcon0 %#010x\n", bank->name, save->eint_fltcon0);
 	pr_debug("%s: save fltcon1 %#010x\n", bank->name, save->eint_fltcon1);
+	pr_debug("%s: save    mask %#010x\n", bank->name, save->eint_mask);
 }
 
 static void exynos_pinctrl_suspend(struct samsung_pinctrl_drv_data *drvdata)
@@ -668,6 +679,9 @@ static void exynos_pinctrl_resume_bank(
 	pr_debug("%s: fltcon1 %#010x => %#010x\n", bank->name,
 			readl(regs + EXYNOS_GPIO_EFLTCON_OFFSET
 			+ 2 * bank->eint_offset + 4), save->eint_fltcon1);
+	pr_debug("%s:    mask %#010x => %#010x\n", bank->name,
+			readl(regs + bank->irq_chip->eint_mask
+			+ bank->eint_offset), save->eint_mask);
 
 	writel(save->eint_con, regs + EXYNOS_GPIO_ECON_OFFSET
 						+ bank->eint_offset);
@@ -675,6 +689,8 @@ static void exynos_pinctrl_resume_bank(
 						+ 2 * bank->eint_offset);
 	writel(save->eint_fltcon1, regs + EXYNOS_GPIO_EFLTCON_OFFSET
 						+ 2 * bank->eint_offset + 4);
+	writel(save->eint_mask, regs + bank->irq_chip->eint_mask
+						+ bank->eint_offset);
 }
 
 static void exynos_pinctrl_resume(struct samsung_pinctrl_drv_data *drvdata)

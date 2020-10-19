@@ -162,7 +162,8 @@ static void ndisc_fill_addr_option(struct sk_buff *skb, int type, void *data)
 	memcpy(opt+2, data, data_len);
 	data_len += 2;
 	opt += data_len;
-	if ((space -= data_len) > 0)
+	space -= data_len;
+	if (space > 0)
 		memset(opt, 0, space);
 }
 
@@ -302,7 +303,7 @@ static int ndisc_constructor(struct neighbour *neigh)
 	bool is_multicast = ipv6_addr_is_multicast(addr);
 
 	in6_dev = in6_dev_get(dev);
-	if (in6_dev == NULL) {
+	if (!in6_dev) {
 		return -EINVAL;
 	}
 
@@ -347,7 +348,7 @@ static int pndisc_constructor(struct pneigh_entry *n)
 	struct in6_addr maddr;
 	struct net_device *dev = n->dev;
 
-	if (dev == NULL || __in6_dev_get(dev) == NULL)
+	if (!dev || !__in6_dev_get(dev))
 		return -EINVAL;
 	addrconf_addr_solict_mult(addr, &maddr);
 	ipv6_dev_mc_inc(dev, &maddr);
@@ -360,7 +361,7 @@ static void pndisc_destructor(struct pneigh_entry *n)
 	struct in6_addr maddr;
 	struct net_device *dev = n->dev;
 
-	if (dev == NULL || __in6_dev_get(dev) == NULL)
+	if (!dev || !__in6_dev_get(dev))
 		return;
 	addrconf_addr_solict_mult(addr, &maddr);
 	ipv6_dev_mc_dec(dev, &maddr);
@@ -551,7 +552,7 @@ void ndisc_send_ns(struct net_device *dev, struct neighbour *neigh,
 	int optlen = 0;
 	struct nd_msg *msg;
 
-	if (saddr == NULL) {
+	if (!saddr) {
 		if (ipv6_get_lladdr(dev, &addr_buf,
 				   (IFA_F_TENTATIVE|IFA_F_OPTIMISTIC)))
 			return;
@@ -658,8 +659,8 @@ static void ndisc_solicit(struct neighbour *neigh, struct sk_buff *skb)
 					   dev, 1,
 					   IFA_F_TENTATIVE|IFA_F_OPTIMISTIC))
 		saddr = &ipv6_hdr(skb)->saddr;
-
-	if ((probes -= NEIGH_VAR(neigh->parms, UCAST_PROBES)) < 0) {
+	probes -= NEIGH_VAR(neigh->parms, UCAST_PROBES);
+	if (probes < 0) {
 		if (!(neigh->nud_state & NUD_VALID)) {
 			ND_PRINTK(1, dbg,
 				  "%s: trying to ucast probe in NUD_INVALID: %pI6\n",
@@ -859,6 +860,7 @@ static void ndisc_recv_na(struct sk_buff *skb)
 				    offsetof(struct nd_msg, opt));
 	struct ndisc_options ndopts;
 	struct net_device *dev = skb->dev;
+	struct inet6_dev *idev = __in6_dev_get(dev);
 	struct inet6_ifaddr *ifp;
 	struct neighbour *neigh;
 
@@ -877,6 +879,14 @@ static void ndisc_recv_na(struct sk_buff *skb)
 		ND_PRINTK(2, warn, "NA: solicited NA is multicasted\n");
 		return;
 	}
+
+	/* For some 802.11 wireless deployments (and possibly other networks),
+	 * there will be a NA proxy and unsolicitd packets are attacks
+	 * and thus should not be accepted.
+	 */
+	if (!msg->icmph.icmp6_solicited && idev &&
+	    idev->cnf.drop_unsolicited_na)
+		return;
 
 	if (!ndisc_parse_options(msg->opt, ndoptlen, &ndopts)) {
 		ND_PRINTK(2, warn, "NS: invalid ND option\n");
@@ -1021,13 +1031,13 @@ static void ndisc_ra_useropt(struct sk_buff *ra, struct nd_opt_hdr *opt)
 	size_t msg_size = base_size + nla_total_size(sizeof(struct in6_addr));
 
 	skb = nlmsg_new(msg_size, GFP_ATOMIC);
-	if (skb == NULL) {
+	if (!skb) {
 		err = -ENOBUFS;
 		goto errout;
 	}
 
 	nlh = nlmsg_put(skb, 0, 0, RTM_NEWNDUSEROPT, base_size, 0);
-	if (nlh == NULL) {
+	if (!nlh) {
 		goto nla_put_failure;
 	}
 
@@ -1095,7 +1105,7 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 	 */
 
 	in6_dev = __in6_dev_get(skb->dev);
-	if (in6_dev == NULL) {
+	if (!in6_dev) {
 		ND_PRINTK(0, err, "RA: can't find inet6 device for %s\n",
 			  skb->dev->name);
 		return;
@@ -1190,11 +1200,11 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 
 	ND_PRINTK(3, info, "RA: rt: %p  lifetime: %d, for dev: %s\n",
 		  rt, lifetime, skb->dev->name);
-	if (rt == NULL && lifetime) {
+	if (!rt && lifetime) {
 		ND_PRINTK(3, info, "RA: adding default router\n");
 
 		rt = rt6_add_dflt_router(&ipv6_hdr(skb)->saddr, skb->dev, pref);
-		if (rt == NULL) {
+		if (!rt) {
 			ND_PRINTK(0, err,
 				  "RA: %s failed to add default route\n",
 				  __func__);
@@ -1202,7 +1212,7 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 		}
 
 		neigh = dst_neigh_lookup(&rt->dst, &ipv6_hdr(skb)->saddr);
-		if (neigh == NULL) {
+		if (!neigh) {
 			ND_PRINTK(0, err,
 				  "RA: %s got default router without neighbour\n",
 				  __func__);
@@ -1500,7 +1510,7 @@ void ndisc_send_redirect(struct sk_buff *skb, const struct in6_addr *target)
 			  "Redirect: destination is not a neighbour\n");
 		goto release;
 	}
-	peer = inet_getpeer_v6(net->ipv6.peers, &rt->rt6i_dst.addr, 1);
+	peer = inet_getpeer_v6(net->ipv6.peers, &ipv6_hdr(skb)->saddr, 1);
 	ret = inet_peer_xrlim_allow(peer, 1*HZ);
 	if (peer)
 		inet_putpeer(peer);

@@ -1671,8 +1671,7 @@ static int pxa_udc_vbus_draw(struct usb_gadget *_gadget, unsigned mA)
 
 static int pxa27x_udc_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
-static int pxa27x_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver);
+static int pxa27x_udc_stop(struct usb_gadget *g);
 
 static const struct usb_gadget_ops pxa_udc_ops = {
 	.get_frame	= pxa_udc_get_frame,
@@ -1725,6 +1724,7 @@ static void udc_init_data(struct pxa_udc *dev)
 	INIT_LIST_HEAD(&dev->gadget.ep_list);
 	INIT_LIST_HEAD(&dev->gadget.ep0->ep_list);
 	dev->udc_usb_ep[0].pxa_ep = &dev->pxa_ep[0];
+	dev->gadget.quirk_altset_not_supp = 1;
 	ep0_idle(dev);
 
 	/* PXA endpoints init */
@@ -1859,8 +1859,7 @@ static void stop_activity(struct pxa_udc *udc, struct usb_gadget_driver *driver)
  *
  * Returns 0 if no error, -ENODEV, -EINVAL otherwise
  */
-static int pxa27x_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver)
+static int pxa27x_udc_stop(struct usb_gadget *g)
 {
 	struct pxa_udc *udc = to_pxa(g);
 

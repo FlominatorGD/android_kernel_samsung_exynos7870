@@ -60,6 +60,10 @@
 #include <pmcApi.h>
 #include <wlan_hdd_misc.h>
 
+#ifdef SEC_WRITE_SOFTAP_INFO_IN_SYSFS
+tANI_U8 sec_softapinfoString[256];
+#endif /* SEC_WRITE_SOFTAP_INFO_IN_SYSFS */
+
 #ifdef SEC_CONFIG_PSM
 unsigned int wlan_hdd_sec_get_psm(unsigned int original_value);
 #endif /* SEC_CONFIG_PSM */
@@ -4350,7 +4354,7 @@ static char *i_trim(char *str)
    if(*str == '\0') return str;
 
    /* Find the first non white-space*/
-   for (ptr = str; i_isspace(*ptr); ptr++);
+   for (ptr = str; i_isspace(*ptr); ptr++)
       if (*ptr == '\0')
          return str;
 
@@ -4359,7 +4363,7 @@ static char *i_trim(char *str)
 
    /* Find the last non white-space */
    ptr += strlen(ptr) - 1;
-   for (; ptr != str && i_isspace(*ptr); ptr--);
+   for (; ptr != str && i_isspace(*ptr); ptr--)
       /* Null terminate the following character */
       ptr[1] = '\0';
 
@@ -5452,6 +5456,20 @@ static VOS_STATUS hdd_apply_cfg_ini( hdd_context_t *pHddCtx, tCfgIniEntry* iniTa
 			 printk("[WIFI] %s: sec_control_psm = %u", pRegEntry->RegName, value);
 		 }
 #endif /* SEC_CONFIG_PSM */
+#ifdef SEC_WRITE_VERSION_IN_SYSFS
+		 if (!strcmp(pRegEntry->RegName, CFG_BAND_CAPABILITY_NAME)) {
+			scnprintf(sec_softapinfoString, 256,
+			"#softap.info\nDualBandConcurrency=%s\n5G=%s\nmaxClient=%d\nHalFn_setCountryCodeHal=%s\nHalFn_getValidChannels=%s\nDualInterface=%s\n",
+		"no",
+		value ? "no" : "yes",
+		(WLAN_MAX_STA_COUNT > 10) ? 10 : WLAN_MAX_STA_COUNT,
+		"yes",
+		"yes",
+		"no"
+			);
+			printk("\n[WIFI] softapinfo=[%s]\n", sec_softapinfoString);
+		 }
+#endif /* SEC_WRITE_VERSION_IN_SYSFS */
 
          // Move the variable into the output field.
          memcpy( pField, &value, pRegEntry->VarSize );
@@ -6174,6 +6192,10 @@ v_BOOL_t hdd_update_config_dat( hdd_context_t *pHddCtx )
 #if defined WLAN_FEATURE_VOWIFI
     if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_MCAST_BCAST_FILTER_SETTING, pConfig->mcastBcastFilterSetting,
                      NULL, eANI_BOOLEAN_FALSE)==eHAL_STATUS_FAILURE)
+     {
+        fStatus = FALSE;
+        hddLog(LOGE, "Could not pass on WNI_CFG_MCAST_BCAST_FILTER_SETTING to CCM");
+     }
 #endif
 
      if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_SINGLE_TID_RC, pConfig->bSingleTidRc,

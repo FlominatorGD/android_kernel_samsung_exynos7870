@@ -215,33 +215,42 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 
 static int kgdb_brk_fn(struct pt_regs *regs, unsigned int esr)
 {
+	if (user_mode(regs))
+		return DBG_HOOK_ERROR;
+
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
-	return 0;
+	return DBG_HOOK_HANDLED;
 }
 
 static int kgdb_compiled_brk_fn(struct pt_regs *regs, unsigned int esr)
 {
+	if (user_mode(regs))
+		return DBG_HOOK_ERROR;
+
 	compiled_break = 1;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
 
-	return 0;
+	return DBG_HOOK_HANDLED;
 }
 
 static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
 {
-	kgdb_handle_exception(1, SIGTRAP, 0, regs);
-	return 0;
+	if (user_mode(regs))
+		return DBG_HOOK_ERROR;
+
+	kgdb_handle_exception(0, SIGTRAP, 0, regs);
+	return DBG_HOOK_HANDLED;
 }
 
 static struct break_hook kgdb_brkpt_hook = {
 	.esr_mask	= 0xffffffff,
-	.esr_val	= DBG_ESR_VAL_BRK(KGDB_DYN_DBG_BRK_IMM),
+	.esr_val	= (u32)ESR_ELx_VAL_BRK64(KGDB_DYN_DBG_BRK_IMM),
 	.fn		= kgdb_brk_fn
 };
 
 static struct break_hook kgdb_compiled_brkpt_hook = {
 	.esr_mask	= 0xffffffff,
-	.esr_val	= DBG_ESR_VAL_BRK(KGDB_COMPILED_DBG_BRK_IMM),
+	.esr_val	= (u32)ESR_ELx_VAL_BRK64(KGDB_COMPILED_DBG_BRK_IMM),
 	.fn		= kgdb_compiled_brk_fn
 };
 
@@ -328,9 +337,9 @@ void kgdb_arch_exit(void)
  */
 struct kgdb_arch arch_kgdb_ops = {
 	.gdb_bpt_instr = {
-		KGDB_DYN_BRK_INS_BYTE0,
-		KGDB_DYN_BRK_INS_BYTE1,
-		KGDB_DYN_BRK_INS_BYTE2,
-		KGDB_DYN_BRK_INS_BYTE3,
+		KGDB_DYN_BRK_INS_BYTE(0),
+		KGDB_DYN_BRK_INS_BYTE(1),
+		KGDB_DYN_BRK_INS_BYTE(2),
+		KGDB_DYN_BRK_INS_BYTE(3),
 	}
 };

@@ -320,13 +320,13 @@ static int exynos_hpgov_set_down_freq(uint32_t val)
 }
 
 #define HPGOV_PARAM(_name, _param) \
-static ssize_t exynos_hpgov_attr_##_name##_show(struct kobject *kobj, \
-			struct kobj_attribute *attr, char *buf) \
+static ssize_t __maybe_unused exynos_hpgov_attr_##_name##_show(struct kobject *kobj, \
+							       struct kobj_attribute *attr, char *buf) \
 { \
 	return snprintf(buf, PAGE_SIZE, "%d\n", _param); \
 } \
-static ssize_t exynos_hpgov_attr_##_name##_store(struct kobject *kobj, \
-		struct kobj_attribute *attr, const char *buf, size_t count) \
+static ssize_t __maybe_unused exynos_hpgov_attr_##_name##_store(struct kobject *kobj, \
+								struct kobj_attribute *attr, const char *buf, size_t count) \
 { \
 	int ret = 0; \
 	uint32_t val; \
@@ -554,7 +554,7 @@ static int __init exynos_hpgov_init(void)
 	exynos_hpgov.attrib.attrib_group.name = "governor";
 	ret = sysfs_create_group(exynos_cpu_hotplug_kobj(), &exynos_hpgov.attrib.attrib_group);
 	if (ret)
-		pr_err("Unable to create sysfs objects :%d\n", ret);
+		pr_err("Unable to create sysfs objects: %d\n", ret);
 
 	atomic_set(&exynos_hpgov.cur_cpu_max, PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
 #ifndef CONFIG_SCHED_HMP

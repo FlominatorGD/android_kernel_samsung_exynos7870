@@ -499,9 +499,9 @@ static void tnode_put_child_reorg(struct tnode *tn, int i, struct rt_trie_node *
 	BUG_ON(i >= 1<<tn->bits);
 
 	/* update emptyChildren */
-	if (n == NULL && chi != NULL)
+	if (!n && chi)
 		tn->empty_children++;
-	else if (n != NULL && chi == NULL)
+	else if (n && !chi)
 		tn->empty_children--;
 
 	/* update fullChildren */
@@ -755,7 +755,7 @@ static struct tnode *inflate(struct trie *t, struct tnode *tn)
 		int size, j;
 
 		/* An empty child */
-		if (node == NULL)
+		if (!node)
 			continue;
 
 		/* A leaf or an internal node with skipped bits */
@@ -1252,7 +1252,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 			}
 			err = -ENOBUFS;
 			new_fa = kmem_cache_alloc(fn_alias_kmem, GFP_KERNEL);
-			if (new_fa == NULL)
+			if (!new_fa)
 				goto out;
 
 			fi_drop = fa->fa_info;
@@ -1289,7 +1289,7 @@ int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 
 	err = -ENOBUFS;
 	new_fa = kmem_cache_alloc(fn_alias_kmem, GFP_KERNEL);
-	if (new_fa == NULL)
+	if (!new_fa)
 		goto out;
 
 	new_fa->fa_info = fi;
@@ -1964,7 +1964,7 @@ struct fib_table *fib_trie_table(u32 id)
 
 	tb = kmalloc(sizeof(struct fib_table) + sizeof(struct trie),
 		     GFP_KERNEL);
-	if (tb == NULL)
+	if (!tb)
 		return NULL;
 
 	tb->tb_id = id;
@@ -2174,6 +2174,7 @@ static int fib_triestat_seq_show(struct seq_file *seq, void *v)
 		   " %Zd bytes, size of tnode: %Zd bytes.\n",
 		   sizeof(struct leaf), sizeof(struct tnode));
 
+	rcu_read_lock();
 	for (h = 0; h < FIB_TABLE_HASHSZ; h++) {
 		struct hlist_head *head = &net->ipv4.fib_table_hash[h];
 		struct fib_table *tb;
@@ -2193,7 +2194,9 @@ static int fib_triestat_seq_show(struct seq_file *seq, void *v)
 			trie_show_usage(seq, &t->stats);
 #endif
 		}
+		cond_resched_rcu();
 	}
+	rcu_read_unlock();
 
 	return 0;
 }

@@ -1030,7 +1030,8 @@ EXPORT_SYMBOL(ipmi_get_smi_info);
 
 static void free_user(struct kref *ref)
 {
-	ipmi_user_t user = container_of(ref, struct ipmi_user, refcount);
+	struct ipmi_user *user = container_of(ref, struct ipmi_user, refcount);
+	cleanup_srcu_struct(&user->release_barrier);
 	kfree(user);
 }
 
@@ -2738,7 +2739,9 @@ get_guid(ipmi_smi_t intf)
 	if (rv)
 		/* Send failed, no GUID available. */
 		intf->bmc->guid_set = 0;
-	wait_event(intf->waitq, intf->bmc->guid_set != 2);
+	else
+		wait_event(intf->waitq, intf->bmc->guid_set != 2);
+
 	intf->null_user_handler = NULL;
 }
 

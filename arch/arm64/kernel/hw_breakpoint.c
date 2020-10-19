@@ -85,16 +85,6 @@ int hw_breakpoint_slots(int type)
 	}
 }
 
-#ifdef CONFIG_SKIP_HW_BREAKPOINT
-static int skip_hw_breakpoint;
-static int __init skip_hw_breakpoint_func(char *str)
-{
-        get_option(&str, &skip_hw_breakpoint);
-        return 0;
-}
-early_param("hw_breakpoint", skip_hw_breakpoint_func);
-#endif
-
 #define READ_WB_REG_CASE(OFF, N, REG, VAL)	\
 	case (OFF + N):				\
 		AARCH64_DBG_READ(N, REG, VAL);	\
@@ -174,7 +164,7 @@ static void write_wb_reg(int reg, int n, u64 val)
  * Convert a breakpoint privilege level to the corresponding exception
  * level.
  */
-static enum debug_el debug_exception_level(int privilege)
+static enum dbg_active_el debug_exception_level(int privilege)
 {
 	switch (privilege) {
 	case AARCH64_BREAKPOINT_EL0:
@@ -248,7 +238,7 @@ static int hw_breakpoint_control(struct perf_event *bp,
 	struct perf_event **slots;
 	struct debug_info *debug_info = &current->thread.debug;
 	int i, max_slots, ctrl_reg, val_reg, reg_enable;
-	enum debug_el dbg_el = debug_exception_level(info->ctrl.privilege);
+	enum dbg_active_el dbg_el = debug_exception_level(info->ctrl.privilege);
 	u32 ctrl;
 
 	if (info->ctrl.type == ARM_BREAKPOINT_EXECUTE) {
@@ -558,12 +548,13 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
 			/* Aligned */
 			break;
 		case 1:
-			/* Allow single byte watchpoint. */
-			if (info->ctrl.len == ARM_BREAKPOINT_LEN_1)
-				break;
 		case 2:
 			/* Allow halfword watchpoints and breakpoints. */
 			if (info->ctrl.len == ARM_BREAKPOINT_LEN_2)
+				break;
+		case 3:
+			/* Allow single byte watchpoint. */
+			if (info->ctrl.len == ARM_BREAKPOINT_LEN_1)
 				break;
 		default:
 			return -EINVAL;
@@ -594,7 +585,7 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
  * exception level at the register level.
  * This is used when single-stepping after a breakpoint exception.
  */
-static void toggle_bp_registers(int reg, enum debug_el el, int enable)
+static void toggle_bp_registers(int reg, enum dbg_active_el el, int enable)
 {
 	int i, max_slots, privilege;
 	u32 ctrl;
@@ -1001,13 +992,6 @@ static inline void cpu_suspend_set_dbg_restorer(void (*hw_bp_restore)(void *))
  */
 static int __init arch_hw_breakpoint_init(void)
 {
-#if defined(CONFIG_SKIP_HW_BREAKPOINT)
-	if (skip_hw_breakpoint) {
-		pr_info("skip arch_hw_breakpoint init\n");
-		return 0;
-	}
-#endif
-
 	core_num_brps = get_num_brps();
 	core_num_wrps = get_num_wrps();
 

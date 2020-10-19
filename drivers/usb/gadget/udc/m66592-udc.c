@@ -1485,8 +1485,7 @@ static int m66592_udc_start(struct usb_gadget *g,
 	return 0;
 }
 
-static int m66592_udc_stop(struct usb_gadget *g,
-		struct usb_gadget_driver *driver)
+static int m66592_udc_stop(struct usb_gadget *g)
 {
 	struct m66592 *m66592 = to_m66592(g);
 
@@ -1674,7 +1673,7 @@ static int m66592_probe(struct platform_device *pdev)
 
 err_add_udc:
 	m66592_free_request(&m66592->ep[0].ep, m66592->ep0_req);
-
+	m66592->ep0_req = NULL;
 clean_up3:
 	if (m66592->pdata->on_chip) {
 		clk_disable(m66592->clk);

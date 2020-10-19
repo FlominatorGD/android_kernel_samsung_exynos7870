@@ -64,8 +64,16 @@ static inline bool rt6_need_strict(const struct in6_addr *daddr)
 
 void ip6_route_input(struct sk_buff *skb);
 
-struct dst_entry *ip6_route_output(struct net *net, const struct sock *sk,
-				   struct flowi6 *fl6);
+struct dst_entry *ip6_route_output_flags(struct net *net, const struct sock *sk,
+					 struct flowi6 *fl6, int flags);
+
+static inline struct dst_entry *ip6_route_output(struct net *net,
+						 const struct sock *sk,
+						 struct flowi6 *fl6)
+{
+	return ip6_route_output_flags(net, sk, fl6, 0);
+}
+
 struct dst_entry *ip6_route_lookup(struct net *net, struct flowi6 *fl6,
 				   int flags);
 
@@ -112,7 +120,7 @@ void ip6_update_pmtu(struct sk_buff *skb, struct net *net, __be32 mtu, int oif,
 		     u32 mark, kuid_t uid);
 void ip6_sk_update_pmtu(struct sk_buff *skb, struct sock *sk, __be32 mtu);
 void ip6_redirect(struct sk_buff *skb, struct net *net, int oif, u32 mark,
-				kuid_t uid);
+		  kuid_t uid);
 void ip6_redirect_no_header(struct sk_buff *skb, struct net *net, int oif,
 			    u32 mark);
 void ip6_sk_redirect(struct sk_buff *skb, struct sock *sk);
@@ -165,11 +173,15 @@ static inline bool ipv6_unicast_destination(const struct sk_buff *skb)
 	return rt->rt6i_flags & RTF_LOCAL;
 }
 
-static inline bool ipv6_anycast_destination(const struct sk_buff *skb)
+static inline bool ipv6_anycast_destination(const struct dst_entry *dst,
+					    const struct in6_addr *daddr)
 {
-	struct rt6_info *rt = (struct rt6_info *) skb_dst(skb);
+	struct rt6_info *rt = (struct rt6_info *)dst;
 
-	return rt->rt6i_flags & RTF_ANYCAST;
+	return rt->rt6i_flags & RTF_ANYCAST ||
+		(rt->rt6i_dst.plen != 128 &&
+		 !(rt->rt6i_flags & (RTF_GATEWAY | RTF_NONEXTHOP)) &&
+		 ipv6_addr_equal(&rt->rt6i_dst.addr, daddr));
 }
 
 int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *));
@@ -195,9 +207,15 @@ static inline bool ip6_sk_ignore_df(const struct sock *sk)
 	       inet6_sk(sk)->pmtudisc == IPV6_PMTUDISC_OMIT;
 }
 
-static inline struct in6_addr *rt6_nexthop(struct rt6_info *rt)
+static inline struct in6_addr *rt6_nexthop(struct rt6_info *rt,
+					   struct in6_addr *daddr)
 {
-	return &rt->rt6i_gateway;
+	if (rt->rt6i_flags & RTF_GATEWAY)
+		return &rt->rt6i_gateway;
+	else if (rt->rt6i_flags & RTF_CACHE)
+		return &rt->rt6i_dst.addr;
+	else
+		return daddr;
 }
 
 #endif

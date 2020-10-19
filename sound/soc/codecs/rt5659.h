@@ -1002,7 +1002,7 @@
 #define RT5659_PWR_ADC_R1			(0x1 << 3)
 #define RT5659_PWR_ADC_R1_BIT			3
 #define RT5659_PWR_ADC_L2			(0x1 << 2)
-#define RT5659_PWR_ADC_L2_BIT			4
+#define RT5659_PWR_ADC_L2_BIT			2
 #define RT5659_PWR_ADC_R2			(0x1 << 1)
 #define RT5659_PWR_ADC_R2_BIT			1
 #define RT5659_PWR_CLS_D			(0x1)
@@ -1277,7 +1277,7 @@
 #define RT5659_PLL1_PD_1			(0x0 << 3)
 #define RT5659_PLL1_PD_2			(0x1 << 3)
 
-#define RT5659_PLL_INP_MAX			40000000
+#define RT5659_PLL_INP_MAX			50000000
 #define RT5659_PLL_INP_MIN			256000
 /* PLL M/N/K Code Control 1 (0x0081) */
 #define RT5659_PLL_N_MAX			0x001ff
@@ -1716,10 +1716,14 @@
 #define RT5659_CKGEN_DAC2_SFT			4
 
 /* Chopper and Clock control for ADC (0x013b)*/
-#define RT5659_CKXEN_ADCC_MASK			(0x1 << 13)
-#define RT5659_CKXEN_ADCC_SFT			13
-#define RT5659_CKGEN_ADCC_MASK			(0x1 << 12)
-#define RT5659_CKGEN_ADCC_SFT			12
+#define RT5659_CKXEN_ADC1_MASK			(0x1 << 13)
+#define RT5659_CKXEN_ADC1_SFT			13
+#define RT5659_CKGEN_ADC1_MASK			(0x1 << 12)
+#define RT5659_CKGEN_ADC1_SFT			12
+#define RT5659_CKXEN_ADC2_MASK			(0x1 << 5)
+#define RT5659_CKXEN_ADC2_SFT			5
+#define RT5659_CKGEN_ADC2_MASK			(0x1 << 4)
+#define RT5659_CKGEN_ADC2_SFT			4
 
 /* Test Mode Control 1 (0x0145) */
 #define RT5659_AD2DA_LB_MASK			(0x1 << 9)

@@ -1622,78 +1622,13 @@ static unsigned char fts_event_handler_type_b(struct fts_ts_info *info,
 		}
 #endif
 
-#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-		if (EventID == EVENTID_ENTER_POINTER)
-#ifdef FTS_SUPPROT_MULTIMEDIA
-			tsp_debug_info(true, &info->client->dev,
-				"[P] tID:%d x:%d y:%d w:%d h:%d z:%d s:%d p:%d tc:%d tm:%d be:%d  ve:%d\n",
-				TouchID, x, y, bw, bh, z, sumsize, palm, info->touch_count, info->touch_mode, info->brush_enable, info->velocity_enable);
-#else
-			tsp_debug_info(true, &info->client->dev,
-				"[P] tID:%d x:%d y:%d w:%d h:%d z:%d s:%d p:%d tc:%d tm:%d\n",
-				TouchID, x, y, bw, bh, z, sumsize, palm, info->touch_count, info->touch_mode);
-#endif
-#ifdef FTS_SUPPORT_HOVER
-		else if (EventID == EVENTID_HOVER_ENTER_POINTER)
-			tsp_debug_dbg(true, &info->client->dev,
-				"[HP] tID:%d x:%d y:%d z:%d\n",
-				TouchID, x, y, z);
-#endif
-#else
-		if (EventID == EVENTID_ENTER_POINTER)
-			tsp_debug_info(true, &info->client->dev,
-				"[P] tID:%d tc:%d tm:%d\n",
-				TouchID, info->touch_count, info->touch_mode);
-#ifdef FTS_SUPPORT_HOVER
-		else if (EventID == EVENTID_HOVER_ENTER_POINTER)
-			tsp_debug_dbg(true, &info->client->dev,
-				"[HP] tID:%d\n", TouchID);
-#endif
-#endif
-		else if (EventID == EVENTID_LEAVE_POINTER) {
-#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-			if (strncmp(info->board->model_name, "G928", 4) == 0) {
-				tsp_debug_info(true, &info->client->dev,
-					"[R] tID:%d mc: %d tc:%d lx: %d ly: %d Ver[%01X%01X%04X%01X%01X%01X]\n",
-					TouchID, info->finger[TouchID].mcount, info->touch_count,
-					info->finger[TouchID].lx, info->finger[TouchID].ly,
-					info->tspid_val,info->tspid2_val, info->fw_main_version_of_ic,
-					info->flip_enable, info->mshover_enabled, info->mainscr_disable);
-			}else{
-				tsp_debug_info(true, &info->client->dev,
-					"[R] tID:%d mc: %d tc:%d lx: %d ly: %d Ver[%02X%04X%01X%01X%01X]\n",
-					TouchID, info->finger[TouchID].mcount, info->touch_count,
-					info->finger[TouchID].lx, info->finger[TouchID].ly,
-					info->panel_revision, info->fw_main_version_of_ic,
-					info->flip_enable, info->mshover_enabled, info->mainscr_disable);
-			}
-#else
-			if (strncmp(info->board->model_name, "G928", 4) == 0) {
-
-				tsp_debug_info(true, &info->client->dev,
-					"[R] tID:%d mc: %d tc:%d Ver[%01X%01X%04X%01X%01X%01X]\n",
-					TouchID, info->finger[TouchID].mcount, info->touch_count,
-					info->tspid_val,info->tspid2_val, info->fw_main_version_of_ic,
-					info->flip_enable, info->mshover_enabled, info->mainscr_disable);
-			}else{
-				tsp_debug_info(true, &info->client->dev,
-					"[R] tID:%d mc: %d tc:%d Ver[%02X%04X%01X%01X%01X]\n",
-					TouchID, info->finger[TouchID].mcount, info->touch_count,
-					info->panel_revision, info->fw_main_version_of_ic,
-					info->flip_enable, info->mshover_enabled, info->mainscr_disable);
-			}
-#endif
+		if (EventID == EVENTID_LEAVE_POINTER) {
 			info->finger[TouchID].mcount = 0;
-		} 
+		}
 #ifdef FTS_SUPPORT_HOVER
 		else if (EventID == EVENTID_HOVER_LEAVE_POINTER) {
-			tsp_debug_dbg(true, &info->client->dev,
-				"[HR] tID:%d Ver[%02X%04X%01X%01X]\n",
-				TouchID,
-				info->panel_revision, info->fw_main_version_of_ic,
-				info->flip_enable, info->mshover_enabled);
 			info->finger[TouchID].mcount = 0;
-		} 
+		}
 #endif
 		else if (EventID == EVENTID_MOTION_POINTER && info->fts_power_state != FTS_POWER_STATE_LOWPOWER)
 			info->finger[TouchID].mcount++;
@@ -1767,6 +1702,10 @@ static irqreturn_t fts_interrupt_handler(int irq, void *handle)
 		pm_wakeup_event(info->input_dev->dev.parent, 1000);
 	}
 #endif
+
+	/* prevent CPU from entering deep sleep */
+	pm_qos_update_request(&info->pm_qos_req, 100);
+
 	evtcount = 0;
 	fts_read_reg(info, &regAdd[0], 3, (unsigned char *)&evtcount, 2);
 
@@ -1790,6 +1729,8 @@ static irqreturn_t fts_interrupt_handler(int irq, void *handle)
 		(info->fts_power_state == FTS_POWER_STATE_LOWPOWER))
 		pm_relax(info->input_dev->dev.parent);
 #endif
+
+	pm_qos_update_request(&info->pm_qos_req, PM_QOS_DEFAULT_VALUE);
 
 	return IRQ_HANDLED;
 }
@@ -2434,6 +2375,9 @@ static int fts_probe(struct i2c_client *client, const struct i2c_device_id *idp)
 
 	info->tsp_enabled = true;
 
+	pm_qos_add_request(&info->pm_qos_req, PM_QOS_CPU_DMA_LATENCY,
+			PM_QOS_DEFAULT_VALUE);
+
 	retval = fts_irq_enable(info, true);
 	if (retval < 0) {
 		tsp_debug_info(true, &info->client->dev,
@@ -2548,6 +2492,7 @@ err_sysfs:
 #endif
 
 err_enable_irq:
+	pm_qos_remove_request(&info->pm_qos_req);
 	input_unregister_device(info->input_dev);
 	info->input_dev = NULL;
 
@@ -2623,6 +2568,8 @@ static int fts_remove(struct i2c_client *client)
 	info->board->power(info, false);
 
 	kfree(info);
+
+	pm_qos_remove_request(&info->pm_qos_req);
 
 	return 0;
 }

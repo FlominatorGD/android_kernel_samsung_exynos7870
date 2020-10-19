@@ -34,7 +34,6 @@ obj-$(CONFIG_ISL29020)		+= isl29020.o
 obj-$(CONFIG_SENSORS_TSL2550)	+= tsl2550.o
 obj-$(CONFIG_DS1682)		+= ds1682.o
 obj-$(CONFIG_TI_DAC7512)	+= ti_dac7512.o
-obj-$(CONFIG_UID_STAT)		+= uid_stat.o
 obj-$(CONFIG_C2PORT)		+= c2port/
 obj-$(CONFIG_HMC6352)		+= hmc6352.o
 obj-y				+= eeprom/
@@ -75,13 +74,6 @@ obj-y				+= tzic64.o
 
 # Samsung Jack Support
 obj-$(CONFIG_SAMSUNG_JACK)	+= sec_jack.o
-
-# TIMA
-obj-$(CONFIG_TIMA)		+= tima_debug_test.o
-obj-$(CONFIG_TIMA_LOG)		+= tima_debug_log.o
-
-# for DMVerity
-obj-$(CONFIG_DM_VERITY)		+= dmverity_query.o
 
 # FPGA for IRIS
 obj-$(CONFIG_LEDS_IRIS_FPGA_ICE40XX)  += ice40xx_iris.o

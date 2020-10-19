@@ -126,7 +126,6 @@ struct tc_fifo_qopt {
 struct tc_prio_qopt {
 	int	bands;			/* Number of bands */
 	__u8	priomap[TC_PRIO_MAX+1];	/* Map: logical priority -> PRIO band */
-	__u8	enable_flow;		/* Enable dequeue */
 };
 
 /* MULTIQ section */
@@ -774,6 +773,8 @@ enum {
 	TCA_FQ_BUCKETS_LOG,	/* log2(number of buckets) */
 
 	TCA_FQ_FLOW_REFILL_DELAY,	/* flow credit refill delay in usec */
+
+	TCA_FQ_ORPHAN_MASK,	/* mask applied to orphaned skb hashes */
 
 	__TCA_FQ_MAX
 };
