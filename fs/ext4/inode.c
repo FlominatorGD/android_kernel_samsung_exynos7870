@@ -1175,16 +1175,21 @@ static int ext4_write_end(struct file *file,
 {
 	handle_t *handle = ext4_journal_current_handle();
 	struct inode *inode = mapping->host;
+	loff_t old_size = inode->i_size;
 	int ret = 0, ret2;
 	int i_size_changed = 0;
+	int inline_data = ext4_has_inline_data(inode);
 
 	trace_android_fs_datawrite_end(inode, pos, len);
 	trace_ext4_write_end(inode, pos, len, copied);
-	if (ext4_has_inline_data(inode)) {
+	if (inline_data) {
 		ret = ext4_write_inline_data_end(inode, pos, len,
 						 copied, page);
-		if (ret < 0)
+		if (ret < 0) {
+			unlock_page(page);
+			put_page(page);
 			goto errout;
+		}
 		copied = ret;
 	} else
 		copied = block_write_end(file, mapping, pos,
@@ -1197,13 +1202,15 @@ static int ext4_write_end(struct file *file,
 	unlock_page(page);
 	page_cache_release(page);
 
+	if (old_size < pos)
+		pagecache_isize_extended(inode, old_size, pos);
 	/*
 	 * Don't mark the inode dirty under page lock. First, it unnecessarily
 	 * makes the holding time of page lock longer. Second, it forces lock
 	 * ordering of page lock and transaction start for journaling
 	 * filesystems.
 	 */
-	if (i_size_changed)
+	if (i_size_changed || inline_data)
 		ext4_mark_inode_dirty(handle, inode);
 
 	if (pos + len > inode->i_size && ext4_can_truncate(inode))
@@ -1231,6 +1238,40 @@ errout:
 	return ret ? ret : copied;
 }
 
+/*
+ * This is a private version of page_zero_new_buffers() which doesn't
+ * set the buffer to be dirty, since in data=journalled mode we need
+ * to call ext4_handle_dirty_metadata() instead.
+ */
+static void ext4_journalled_zero_new_buffers(handle_t *handle,
+					    struct page *page,
+					    unsigned from, unsigned to)
+{
+	unsigned int block_start = 0, block_end;
+	struct buffer_head *head, *bh;
+
+	bh = head = page_buffers(page);
+	do {
+		block_end = block_start + bh->b_size;
+		if (buffer_new(bh)) {
+			if (block_end > from && block_start < to) {
+				if (!PageUptodate(page)) {
+					unsigned start, size;
+
+					start = max(from, block_start);
+					size = min(to, block_end) - start;
+
+					zero_user(page, start, size);
+					write_end_fn(handle, bh);
+				}
+				clear_buffer_new(bh);
+			}
+		}
+		block_start = block_end;
+		bh = bh->b_this_page;
+	} while (bh != head);
+}
+
 static int ext4_journalled_write_end(struct file *file,
 				     struct address_space *mapping,
 				     loff_t pos, unsigned len, unsigned copied,
@@ -1238,10 +1279,12 @@ static int ext4_journalled_write_end(struct file *file,
 {
 	handle_t *handle = ext4_journal_current_handle();
 	struct inode *inode = mapping->host;
+	loff_t old_size = inode->i_size;
 	int ret = 0, ret2;
 	int partial = 0;
 	unsigned from, to;
 	int size_changed = 0;
+	int inline_data = ext4_has_inline_data(inode);
 
 	trace_android_fs_datawrite_end(inode, pos, len);
 	trace_ext4_journalled_write_end(inode, pos, len, copied);
@@ -1250,18 +1293,25 @@ static int ext4_journalled_write_end(struct file *file,
 
 	BUG_ON(!ext4_handle_valid(handle));
 
-	if (ext4_has_inline_data(inode))
-		copied = ext4_write_inline_data_end(inode, pos, len,
-						    copied, page);
-	else {
-		if (copied < len) {
-			if (!PageUptodate(page))
-				copied = 0;
-			page_zero_new_buffers(page, from+copied, to);
+	if (inline_data) {
+		ret = ext4_write_inline_data_end(inode, pos, len,
+						 copied, page);
+		if (ret < 0) {
+			unlock_page(page);
+			put_page(page);
+			goto errout;
 		}
-
+		copied = ret;
+	} else if (unlikely(copied < len) && !PageUptodate(page)) {
+		copied = 0;
+		ext4_journalled_zero_new_buffers(handle, page, from, to);
+	} else {
+		if (unlikely(copied < len))
+			ext4_journalled_zero_new_buffers(handle, page,
+							 from + copied, to);
 		ret = ext4_walk_page_buffers(handle, page_buffers(page), from,
-					     to, &partial, write_end_fn);
+					     from + copied, &partial,
+					     write_end_fn);
 		if (!partial)
 			SetPageUptodate(page);
 	}
@@ -1271,7 +1321,10 @@ static int ext4_journalled_write_end(struct file *file,
 	unlock_page(page);
 	page_cache_release(page);
 
-	if (size_changed) {
+	if (old_size < pos)
+		pagecache_isize_extended(inode, old_size, pos);
+
+	if (size_changed || inline_data) {
 		ret2 = ext4_mark_inode_dirty(handle, inode);
 		if (!ret)
 			ret = ret2;
@@ -1284,6 +1337,7 @@ static int ext4_journalled_write_end(struct file *file,
 		 */
 		ext4_orphan_add(handle, inode);
 
+errout:
 	ret2 = ext4_journal_stop(handle);
 	if (!ret)
 		ret = ret2;
@@ -1797,11 +1851,7 @@ static int __ext4_journalled_writepage(struct page *page,
 	}
 
 	if (inline_data) {
-		BUFFER_TRACE(inode_bh, "get write access");
-		ret = ext4_journal_get_write_access(handle, inode_bh);
-
-		err = ext4_handle_dirty_metadata(handle, inode, inode_bh);
-
+		ret = ext4_mark_inode_dirty(handle, inode);
 	} else {
 		ret = ext4_walk_page_buffers(handle, page_bufs, 0, len, NULL,
 					     do_journal_get_write_access);
@@ -4540,6 +4590,70 @@ static int ext4_inode_blocks_set(handle_t *handle,
 	return 0;
 }
 
+struct other_inode {
+	unsigned long		orig_ino;
+	struct ext4_inode	*raw_inode;
+};
+
+static int other_inode_match(struct inode * inode, unsigned long ino,
+			     void *data)
+{
+	struct other_inode *oi = (struct other_inode *) data;
+
+	if ((inode->i_ino != ino) ||
+	    (inode->i_state & (I_FREEING | I_WILL_FREE | I_NEW |
+			       I_DIRTY_SYNC | I_DIRTY_DATASYNC)) ||
+	    ((inode->i_state & I_DIRTY_TIME) == 0))
+		return 0;
+	spin_lock(&inode->i_lock);
+	if (((inode->i_state & (I_FREEING | I_WILL_FREE | I_NEW |
+				I_DIRTY_SYNC | I_DIRTY_DATASYNC)) == 0) &&
+	    (inode->i_state & I_DIRTY_TIME)) {
+		struct ext4_inode_info	*ei = EXT4_I(inode);
+
+		inode->i_state &= ~(I_DIRTY_TIME | I_DIRTY_TIME_EXPIRED);
+		spin_unlock(&inode->i_lock);
+
+		spin_lock(&ei->i_raw_lock);
+		EXT4_INODE_SET_XTIME(i_ctime, inode, oi->raw_inode);
+		EXT4_INODE_SET_XTIME(i_mtime, inode, oi->raw_inode);
+		EXT4_INODE_SET_XTIME(i_atime, inode, oi->raw_inode);
+		ext4_inode_csum_set(inode, oi->raw_inode, ei);
+		spin_unlock(&ei->i_raw_lock);
+		trace_ext4_other_inode_update_time(inode, oi->orig_ino);
+		return -1;
+	}
+	spin_unlock(&inode->i_lock);
+	return -1;
+}
+
+/*
+ * Opportunistically update the other time fields for other inodes in
+ * the same inode table block.
+ */
+static void ext4_update_other_inodes_time(struct super_block *sb,
+					  unsigned long orig_ino, char *buf)
+{
+	struct other_inode oi;
+	unsigned long ino;
+	int i, inodes_per_block = EXT4_SB(sb)->s_inodes_per_block;
+	int inode_size = EXT4_INODE_SIZE(sb);
+
+	oi.orig_ino = orig_ino;
+	/*
+	 * Calculate the first inode in the inode table block.  Inode
+	 * numbers are one-based.  That is, the first inode in a block
+	 * (assuming 4k blocks and 256 byte inodes) is (n*16 + 1).
+	 */
+	ino = ((orig_ino - 1) & ~(inodes_per_block - 1)) + 1;
+	for (i = 0; i < inodes_per_block; i++, ino++, buf += inode_size) {
+		if (ino == orig_ino)
+			continue;
+		oi.raw_inode = (struct ext4_inode *) buf;
+		(void) find_inode_nowait(sb, ino, other_inode_match, &oi);
+	}
+}
+
 /*
  * Post the struct inode info into an on-disk inode location in the
  * buffer-cache.  This gobbles the caller's reference to the
@@ -4649,10 +4763,11 @@ static int ext4_do_update_inode(handle_t *handle,
 				cpu_to_le16(ei->i_extra_isize);
 		}
 	}
-
 	ext4_inode_csum_set(inode, raw_inode, ei);
-
 	spin_unlock(&ei->i_raw_lock);
+	if (inode->i_sb->s_flags & MS_LAZYTIME)
+		ext4_update_other_inodes_time(inode->i_sb, inode->i_ino,
+					      bh->b_data);
 
 	BUFFER_TRACE(bh, "call ext4_handle_dirty_metadata");
 	rc = ext4_handle_dirty_metadata(handle, NULL, bh);
@@ -4833,8 +4948,11 @@ int ext4_setattr(struct dentry *dentry, struct iattr *attr)
 	if (error)
 		return error;
 
-	if (is_quota_modification(inode, attr))
-		dquot_initialize(inode);
+	if (is_quota_modification(inode, attr)) {
+		error = dquot_initialize(inode);
+		if (error)
+			return error;
+	}
 	if ((ia_valid & ATTR_UID && !uid_eq(attr->ia_uid, inode->i_uid)) ||
 	    (ia_valid & ATTR_GID && !gid_eq(attr->ia_gid, inode->i_gid))) {
 		handle_t *handle;

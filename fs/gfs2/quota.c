@@ -171,8 +171,8 @@ static unsigned long gfs2_qd_shrink_scan(struct shrinker *shrink,
 	if (!(sc->gfp_mask & __GFP_FS))
 		return SHRINK_STOP;
 
-	freed = list_lru_walk_node(&gfs2_qd_lru, sc->nid, gfs2_qd_isolate,
-				   &dispose, &sc->nr_to_scan);
+	freed = list_lru_shrink_walk(&gfs2_qd_lru, sc,
+				     gfs2_qd_isolate, &dispose);
 
 	gfs2_qd_dispose(&dispose);
 
@@ -182,7 +182,7 @@ static unsigned long gfs2_qd_shrink_scan(struct shrinker *shrink,
 static unsigned long gfs2_qd_shrink_count(struct shrinker *shrink,
 					  struct shrink_control *sc)
 {
-	return vfs_pressure_ratio(list_lru_count_node(&gfs2_qd_lru, sc->nid));
+	return vfs_pressure_ratio(list_lru_shrink_count(&gfs2_qd_lru, sc));
 }
 
 struct shrinker gfs2_qd_shrinker = {
@@ -1471,32 +1471,34 @@ int gfs2_quotad(void *data)
 	return 0;
 }
 
-static int gfs2_quota_get_xstate(struct super_block *sb,
-				 struct fs_quota_stat *fqs)
+static int gfs2_quota_get_state(struct super_block *sb, struct qc_state *state)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 
-	memset(fqs, 0, sizeof(struct fs_quota_stat));
-	fqs->qs_version = FS_QSTAT_VERSION;
+	memset(state, 0, sizeof(*state));
 
 	switch (sdp->sd_args.ar_quota) {
 	case GFS2_QUOTA_ON:
-		fqs->qs_flags |= (FS_QUOTA_UDQ_ENFD | FS_QUOTA_GDQ_ENFD);
+		state->s_state[USRQUOTA].flags |= QCI_LIMITS_ENFORCED;
+		state->s_state[GRPQUOTA].flags |= QCI_LIMITS_ENFORCED;
 		/*FALLTHRU*/
 	case GFS2_QUOTA_ACCOUNT:
-		fqs->qs_flags |= (FS_QUOTA_UDQ_ACCT | FS_QUOTA_GDQ_ACCT);
+		state->s_state[USRQUOTA].flags |= QCI_ACCT_ENABLED |
+						  QCI_SYSFILE;
+		state->s_state[GRPQUOTA].flags |= QCI_ACCT_ENABLED |
+						  QCI_SYSFILE;
 		break;
 	case GFS2_QUOTA_OFF:
 		break;
 	}
-
 	if (sdp->sd_quota_inode) {
-		fqs->qs_uquota.qfs_ino = GFS2_I(sdp->sd_quota_inode)->i_no_addr;
-		fqs->qs_uquota.qfs_nblks = sdp->sd_quota_inode->i_blocks;
+		state->s_state[USRQUOTA].ino =
+					GFS2_I(sdp->sd_quota_inode)->i_no_addr;
+		state->s_state[USRQUOTA].blocks = sdp->sd_quota_inode->i_blocks;
 	}
-	fqs->qs_uquota.qfs_nextents = 1; /* unsupported */
-	fqs->qs_gquota = fqs->qs_uquota; /* its the same inode in both cases */
-	fqs->qs_incoredqs = list_lru_count(&gfs2_qd_lru);
+	state->s_state[USRQUOTA].nextents = 1;	/* unsupported */
+	state->s_state[GRPQUOTA] = state->s_state[USRQUOTA];
+	state->s_incoredqs = list_lru_count(&gfs2_qd_lru);
 	return 0;
 }
 
@@ -1641,7 +1643,7 @@ out_put:
 
 const struct quotactl_ops gfs2_quotactl_ops = {
 	.quota_sync     = gfs2_quota_sync,
-	.get_xstate     = gfs2_quota_get_xstate,
+	.get_state	= gfs2_quota_get_state,
 	.get_dqblk	= gfs2_get_dqblk,
 	.set_dqblk	= gfs2_set_dqblk,
 };

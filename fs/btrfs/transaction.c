@@ -432,7 +432,7 @@ start_transaction(struct btrfs_root *root, u64 num_items, unsigned int type,
 			goto reserve_fail;
 	}
 again:
-	h = kmem_cache_alloc(btrfs_trans_handle_cachep, GFP_NOFS);
+	h = kmem_cache_zalloc(btrfs_trans_handle_cachep, GFP_NOFS);
 	if (!h) {
 		ret = -ENOMEM;
 		goto alloc_fail;
@@ -473,20 +473,10 @@ again:
 
 	h->transid = cur_trans->transid;
 	h->transaction = cur_trans;
-	h->bytes_reserved = 0;
 	h->root = root;
-	h->delayed_ref_updates = 0;
 	h->use_count = 1;
-	h->adding_csums = 0;
-	h->block_rsv = NULL;
-	h->orig_rsv = NULL;
-	h->aborted = 0;
-	h->qgroup_reserved = 0;
-	h->delayed_ref_elem.seq = 0;
 	h->type = type;
-	h->allocating_chunk = false;
-	h->reloc_reserved = false;
-	h->sync = false;
+	h->can_flush_pending_bgs = true;
 	INIT_LIST_HEAD(&h->qgroup_ref_list);
 	INIT_LIST_HEAD(&h->new_bgs);
 	INIT_LIST_HEAD(&h->ordered);
@@ -756,6 +746,8 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	if (!list_empty(&trans->new_bgs))
 		btrfs_create_pending_block_groups(trans, root);
+
+	btrfs_trans_release_chunk_metadata(trans);
 
 	if (lock && !atomic_read(&root->fs_info->open_ioctl_trans) &&
 	    should_end_transaction(trans, root) &&
@@ -1944,6 +1936,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 	clear_bit(BTRFS_INODE_BTREE_LOG1_ERR, &btree_ino->runtime_flags);
 	clear_bit(BTRFS_INODE_BTREE_LOG2_ERR, &btree_ino->runtime_flags);
 
+	btrfs_trans_release_chunk_metadata(trans);
+
 	spin_lock(&root->fs_info->trans_lock);
 	cur_trans->state = TRANS_STATE_UNBLOCKED;
 	root->fs_info->running_transaction = NULL;
@@ -2004,7 +1998,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 
 	kmem_cache_free(btrfs_trans_handle_cachep, trans);
 
-	if (current != root->fs_info->transaction_kthread)
+	if (current != root->fs_info->transaction_kthread &&
+	    current != root->fs_info->cleaner_kthread)
 		btrfs_run_delayed_iputs(root);
 
 	return ret;
@@ -2013,6 +2008,7 @@ scrub_continue:
 	btrfs_scrub_continue(root);
 cleanup_transaction:
 	btrfs_trans_release_metadata(trans, root);
+	btrfs_trans_release_chunk_metadata(trans);
 	trans->block_rsv = NULL;
 	if (trans->qgroup_reserved) {
 		btrfs_qgroup_free(root, trans->qgroup_reserved);

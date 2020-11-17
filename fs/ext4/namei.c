@@ -2433,7 +2433,9 @@ static int ext4_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	struct inode *inode;
 	int err, credits, retries = 0;
 
-	dquot_initialize(dir);
+	err = dquot_initialize(dir);
+	if (err)
+		return err;
 
 	credits = (EXT4_DATA_TRANS_BLOCKS(dir->i_sb) +
 		   EXT4_INDEX_EXTRA_TRANS_BLOCKS + 3);
@@ -2467,7 +2469,9 @@ static int ext4_mknod(struct inode *dir, struct dentry *dentry,
 	if (!new_valid_dev(rdev))
 		return -EINVAL;
 
-	dquot_initialize(dir);
+	err = dquot_initialize(dir);
+	if (err)
+		return err;
 
 	credits = (EXT4_DATA_TRANS_BLOCKS(dir->i_sb) +
 		   EXT4_INDEX_EXTRA_TRANS_BLOCKS + 3);
@@ -2496,7 +2500,9 @@ static int ext4_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
 	struct inode *inode;
 	int err, retries = 0;
 
-	dquot_initialize(dir);
+	err = dquot_initialize(dir);
+	if (err)
+		return err;
 
 retry:
 	inode = ext4_new_inode_start_handle(dir, mode,
@@ -2609,7 +2615,9 @@ static int ext4_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	if (EXT4_DIR_LINK_MAX(dir))
 		return -EMLINK;
 
-	dquot_initialize(dir);
+	err = dquot_initialize(dir);
+	if (err)
+		return err;
 
 	credits = (EXT4_DATA_TRANS_BLOCKS(dir->i_sb) +
 		   EXT4_INDEX_EXTRA_TRANS_BLOCKS + 3);
@@ -2911,8 +2919,12 @@ static int ext4_rmdir(struct inode *dir, struct dentry *dentry)
 
 	/* Initialize quotas before so that eventual writes go in
 	 * separate transaction */
-	dquot_initialize(dir);
-	dquot_initialize(dentry->d_inode);
+	retval = dquot_initialize(dir);
+	if (retval)
+		return retval;
+	retval = dquot_initialize(dentry->d_inode);
+	if (retval)
+		return retval;
 
 	retval = -ENOENT;
 	bh = ext4_find_entry(dir, &dentry->d_name, &de, NULL);
@@ -2980,8 +2992,12 @@ static int ext4_unlink(struct inode *dir, struct dentry *dentry)
 	trace_ext4_unlink_enter(dir, dentry);
 	/* Initialize quotas before so that eventual writes go
 	 * in separate transaction */
-	dquot_initialize(dir);
-	dquot_initialize(dentry->d_inode);
+	retval = dquot_initialize(dir);
+	if (retval)
+		return retval;
+	retval = dquot_initialize(dentry->d_inode);
+	if (retval)
+		return retval;
 
 	retval = -ENOENT;
 	bh = ext4_find_entry(dir, &dentry->d_name, &de, NULL);
@@ -3067,7 +3083,9 @@ static int ext4_symlink(struct inode *dir,
 		goto err_free_sd;
 	}
 
-	dquot_initialize(dir);
+	err = dquot_initialize(dir);
+	if (err)
+		goto err_free_sd;
 
 	if ((disk_link.len > EXT4_N_BLOCKS * 4)) {
 		/*
@@ -3195,8 +3213,10 @@ static int ext4_link(struct dentry *old_dentry,
 		return -EMLINK;
 	if (ext4_encrypted_inode(dir) &&
 	    !ext4_is_child_context_consistent_with_parent(dir, inode))
-		return -EPERM;
-	dquot_initialize(dir);
+		return -EXDEV;
+	err = dquot_initialize(dir);
+	if (err)
+		return err;
 
 retry:
 	handle = ext4_journal_start(dir, EXT4_HT_DIR,
@@ -3475,13 +3495,20 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 	int credits;
 	u8 old_file_type;
 
-	dquot_initialize(old.dir);
-	dquot_initialize(new.dir);
+	retval = dquot_initialize(old.dir);
+	if (retval)
+		return retval;
+	retval = dquot_initialize(new.dir);
+	if (retval)
+		return retval;
 
 	/* Initialize quotas before so that eventual writes go
 	 * in separate transaction */
-	if (new.inode)
-		dquot_initialize(new.inode);
+	if (new.inode) {
+		retval = dquot_initialize(new.inode);
+		if (retval)
+			return retval;
+	}
 
 	old.bh = ext4_find_entry(old.dir, &old.dentry->d_name, &old.de, NULL);
 	if (IS_ERR(old.bh))
@@ -3500,7 +3527,7 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 	    ext4_encrypted_inode(new.dir) &&
 	    !ext4_is_child_context_consistent_with_parent(new.dir,
 							  old.inode)) {
-		retval = -EPERM;
+		retval = -EXDEV;
 		goto end_rename;
 	}
 
@@ -3675,10 +3702,14 @@ static int ext4_cross_rename(struct inode *old_dir, struct dentry *old_dentry,
 							   old.inode) ||
 	     !ext4_is_child_context_consistent_with_parent(old_dir,
 							   new.inode)))
-		return -EPERM;
+		return -EXDEV;
 
-	dquot_initialize(old.dir);
-	dquot_initialize(new.dir);
+	retval = dquot_initialize(old.dir);
+	if (retval)
+		return retval;
+	retval = dquot_initialize(new.dir);
+	if (retval)
+		return retval;
 
 	old.bh = ext4_find_entry(old.dir, &old.dentry->d_name,
 				 &old.de, &old.inlined);

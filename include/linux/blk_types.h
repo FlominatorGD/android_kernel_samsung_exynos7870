@@ -85,6 +85,7 @@ struct bio {
 	};
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
+
 #if defined(CONFIG_MMC_DW_FMP_DM_CRYPT) || defined(CONFIG_UFS_FMP_DM_CRYPT)
 	int			private_enc_mode;
 	int			private_algo_mode;
@@ -126,16 +127,13 @@ struct bio {
 #define BIO_EOPNOTSUPP	7	/* not supported */
 #define BIO_NULL_MAPPED 8	/* contains invalid user pages */
 #define BIO_QUIET	9	/* Make BIO Quiet */
-#define BIO_SNAP_STABLE	10	/* bio data must be snapshotted during write */
-
-#define BIO_BYPASS	13
 
 /*
  * Flags starting here get preserved by bio_reset() - this includes
  * BIO_POOL_IDX()
  */
-#define BIO_RESET_BITS	14	/* should be larger then BIO_BYPASS */
-#define BIO_OWNS_VEC	14	/* bio_free() should free bvec */
+#define BIO_RESET_BITS	13
+#define BIO_OWNS_VEC	13	/* bio_free() should free bvec */
 
 #define bio_flagged(bio, flag)	((bio)->bi_flags & (1 << (flag)))
 
@@ -172,7 +170,6 @@ enum rq_flag_bits {
 	__REQ_INTEGRITY,	/* I/O includes block integrity payload */
 	__REQ_FUA,		/* forced unit access */
 	__REQ_FLUSH,		/* request for cache flush */
-	__REQ_KERNEL, 		/* direct IO to kernel pages */
 
 	/* bio only flags */
 	__REQ_RAHEAD,		/* read ahead, can fail anytime */
@@ -220,7 +217,7 @@ enum rq_flag_bits {
 #define REQ_COMMON_MASK \
 	(REQ_WRITE | REQ_FAILFAST_MASK | REQ_SYNC | REQ_META | REQ_PRIO | \
 	 REQ_DISCARD | REQ_WRITE_SAME | REQ_NOIDLE | REQ_FLUSH | REQ_FUA | \
-	 REQ_SECURE | REQ_INTEGRITY | REQ_KERNEL)
+	 REQ_SECURE | REQ_INTEGRITY)
 #define REQ_CLONE_MASK		REQ_COMMON_MASK
 
 #define BIO_NO_ADVANCE_ITER_MASK	(REQ_DISCARD|REQ_WRITE_SAME)
@@ -250,7 +247,6 @@ enum rq_flag_bits {
 #define REQ_IO_STAT		(1ULL << __REQ_IO_STAT)
 #define REQ_MIXED_MERGE		(1ULL << __REQ_MIXED_MERGE)
 #define REQ_SECURE		(1ULL << __REQ_SECURE)
-#define REQ_KERNEL		(1ULL << __REQ_KERNEL)
 #define REQ_PM			(1ULL << __REQ_PM)
 #define REQ_HASHED		(1ULL << __REQ_HASHED)
 #define REQ_MQ_INFLIGHT		(1ULL << __REQ_MQ_INFLIGHT)

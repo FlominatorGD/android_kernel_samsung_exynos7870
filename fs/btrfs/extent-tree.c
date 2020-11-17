@@ -2777,7 +2777,7 @@ int btrfs_run_delayed_refs(struct btrfs_trans_handle *trans,
 	struct btrfs_delayed_ref_head *head;
 	int ret;
 	int run_all = count == (unsigned long)-1;
-	int run_most = 0;
+	bool can_flush_pending_bgs = trans->can_flush_pending_bgs;
 
 	/* We'll clean this up in btrfs_cleanup_transaction */
 	if (trans->aborted)
@@ -2787,15 +2787,14 @@ int btrfs_run_delayed_refs(struct btrfs_trans_handle *trans,
 		root = root->fs_info->tree_root;
 
 	delayed_refs = &trans->transaction->delayed_refs;
-	if (count == 0) {
+	if (count == 0)
 		count = atomic_read(&delayed_refs->num_entries) * 2;
-		run_most = 1;
-	}
 
 again:
 #ifdef SCRAMBLE_DELAYED_REFS
 	delayed_refs->run_delayed_start = find_middle(&delayed_refs->root);
 #endif
+	trans->can_flush_pending_bgs = false;
 	ret = __btrfs_run_delayed_refs(trans, root, count);
 	if (ret < 0) {
 		btrfs_abort_transaction(trans, root, ret);
@@ -2848,6 +2847,7 @@ out:
 	if (ret)
 		return ret;
 	assert_qgroups_uptodate(trans);
+	trans->can_flush_pending_bgs = can_flush_pending_bgs;
 	return 0;
 }
 
@@ -3509,7 +3509,10 @@ static int update_space_info(struct btrfs_fs_info *info, u64 flags,
 	found->bytes_reserved = 0;
 	found->bytes_readonly = 0;
 	found->bytes_may_use = 0;
-	found->full = 0;
+	if (total_bytes > 0)
+		found->full = 0;
+	else
+		found->full = 1;
 	found->force_alloc = CHUNK_ALLOC_NO_FORCE;
 	found->chunk_alloc = 0;
 	found->flush = 0;
@@ -3879,11 +3882,19 @@ static void check_system_chunk(struct btrfs_trans_handle *trans,
 	struct btrfs_space_info *info;
 	u64 left;
 	u64 thresh;
+	int ret = 0;
+
+	/*
+	 * Needed because we can end up allocating a system chunk and for an
+	 * atomic and race free space reservation in the chunk block reserve.
+	 */
+	ASSERT(mutex_is_locked(&root->fs_info->chunk_mutex));
 
 	info = __find_space_info(root->fs_info, BTRFS_BLOCK_GROUP_SYSTEM);
 	spin_lock(&info->lock);
 	left = info->total_bytes - info->bytes_used - info->bytes_pinned -
-		info->bytes_reserved - info->bytes_readonly;
+		info->bytes_reserved - info->bytes_readonly -
+		info->bytes_may_use;
 	spin_unlock(&info->lock);
 
 	thresh = get_system_chunk_thresh(root, type);
@@ -3897,7 +3908,21 @@ static void check_system_chunk(struct btrfs_trans_handle *trans,
 		u64 flags;
 
 		flags = btrfs_get_alloc_profile(root->fs_info->chunk_root, 0);
-		btrfs_alloc_chunk(trans, root, flags);
+		/*
+		 * Ignore failure to create system chunk. We might end up not
+		 * needing it, as we might not need to COW all nodes/leafs from
+		 * the paths we visit in the chunk tree (they were already COWed
+		 * or created in the current transaction for example).
+		 */
+		ret = btrfs_alloc_chunk(trans, root, flags);
+	}
+
+	if (!ret) {
+		ret = btrfs_block_rsv_add(root->fs_info->chunk_root,
+					  &root->fs_info->chunk_block_rsv,
+					  thresh, BTRFS_RESERVE_NO_FLUSH);
+		if (!ret)
+			trans->chunk_bytes_reserved += thresh;
 	}
 }
 
@@ -4003,6 +4028,25 @@ out:
 	space_info->chunk_alloc = 0;
 	spin_unlock(&space_info->lock);
 	mutex_unlock(&fs_info->chunk_mutex);
+	/*
+	 * When we allocate a new chunk we reserve space in the chunk block
+	 * reserve to make sure we can COW nodes/leafs in the chunk tree or
+	 * add new nodes/leafs to it if we end up needing to do it when
+	 * inserting the chunk item and updating device items as part of the
+	 * second phase of chunk allocation, performed by
+	 * btrfs_finish_chunk_alloc(). So make sure we don't accumulate a
+	 * large number of new block groups to create in our transaction
+	 * handle's new_bgs list to avoid exhausting the chunk block reserve
+	 * in extreme cases - like having a single transaction create many new
+	 * block groups when starting to write out the free space caches of all
+	 * the block groups that were made dirty during the lifetime of the
+	 * transaction.
+	 */
+	if (trans->can_flush_pending_bgs &&
+	    trans->chunk_bytes_reserved >= (2 * 1024 * 1024ull)) {
+		btrfs_create_pending_block_groups(trans, trans->root);
+		btrfs_trans_release_chunk_metadata(trans);
+	}
 	return ret;
 }
 
@@ -4947,6 +4991,24 @@ void btrfs_trans_release_metadata(struct btrfs_trans_handle *trans,
 				      trans->transid, trans->bytes_reserved, 0);
 	btrfs_block_rsv_release(root, trans->block_rsv, trans->bytes_reserved);
 	trans->bytes_reserved = 0;
+}
+
+/*
+ * To be called after all the new block groups attached to the transaction
+ * handle have been created (btrfs_create_pending_block_groups()).
+ */
+void btrfs_trans_release_chunk_metadata(struct btrfs_trans_handle *trans)
+{
+	struct btrfs_fs_info *fs_info = trans->root->fs_info;
+
+	if (!trans->chunk_bytes_reserved)
+		return;
+
+	WARN_ON_ONCE(!list_empty(&trans->new_bgs));
+
+	block_rsv_release_bytes(fs_info, &fs_info->chunk_block_rsv, NULL,
+				trans->chunk_bytes_reserved);
+	trans->chunk_bytes_reserved = 0;
 }
 
 /* Can only return 0 or -ENOSPC */
@@ -7231,6 +7293,20 @@ btrfs_init_new_buffer(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 	buf = btrfs_find_create_tree_block(root, bytenr, blocksize);
 	if (!buf)
 		return ERR_PTR(-ENOMEM);
+
+	/*
+	 * Extra safety check in case the extent tree is corrupted and extent
+	 * allocator chooses to use a tree block which is already used and
+	 * locked.
+	 */
+	if (buf->lock_owner == current->pid) {
+		btrfs_err_rl(root->fs_info,
+"tree block %llu owner %llu already locked by pid=%d, extent tree corruption detected",
+			buf->start, btrfs_header_owner(buf), current->pid);
+		free_extent_buffer(buf);
+		return ERR_PTR(-EUCLEAN);
+	}
+
 	btrfs_set_header_generation(buf, trans->transid);
 	btrfs_set_buffer_lockdep_class(root->root_key.objectid, buf, level);
 	btrfs_tree_lock(buf);
@@ -8057,15 +8133,14 @@ static noinline int walk_up_proc(struct btrfs_trans_handle *trans,
 	if (eb == root->node) {
 		if (wc->flags[level] & BTRFS_BLOCK_FLAG_FULL_BACKREF)
 			parent = eb->start;
-		else
-			BUG_ON(root->root_key.objectid !=
-			       btrfs_header_owner(eb));
+		else if (root->root_key.objectid != btrfs_header_owner(eb))
+			goto owner_mismatch;
 	} else {
 		if (wc->flags[level + 1] & BTRFS_BLOCK_FLAG_FULL_BACKREF)
 			parent = path->nodes[level + 1]->start;
-		else
-			BUG_ON(root->root_key.objectid !=
-			       btrfs_header_owner(path->nodes[level + 1]));
+		else if (root->root_key.objectid !=
+			 btrfs_header_owner(path->nodes[level + 1]))
+			goto owner_mismatch;
 	}
 
 	btrfs_free_tree_block(trans, root, eb, parent, wc->refs[level] == 1);
@@ -8073,6 +8148,11 @@ out:
 	wc->refs[level] = 0;
 	wc->flags[level] = 0;
 	return 0;
+
+owner_mismatch:
+	btrfs_err_rl(root->fs_info, "unexpected tree owner, have %llu expect %llu",
+		     btrfs_header_owner(eb), root->root_key.objectid);
+	return -EUCLEAN;
 }
 
 static noinline int walk_down_tree(struct btrfs_trans_handle *trans,
@@ -8126,6 +8206,8 @@ static noinline int walk_up_tree(struct btrfs_trans_handle *trans,
 			ret = walk_up_proc(trans, root, path, wc);
 			if (ret > 0)
 				return 0;
+			if (ret < 0)
+				return ret;
 
 			if (path->locks[level]) {
 				btrfs_tree_unlock_rw(path->nodes[level],
@@ -8897,6 +8979,7 @@ void btrfs_put_block_group_cache(struct btrfs_fs_info *info)
 
 		block_group = btrfs_lookup_first_block_group(info, last);
 		while (block_group) {
+			wait_block_group_cache_done(block_group);
 			spin_lock(&block_group->lock);
 			if (block_group->iref)
 				break;
@@ -9338,13 +9421,18 @@ error:
 void btrfs_create_pending_block_groups(struct btrfs_trans_handle *trans,
 				       struct btrfs_root *root)
 {
-	struct btrfs_block_group_cache *block_group, *tmp;
+	struct btrfs_block_group_cache *block_group;
 	struct btrfs_root *extent_root = root->fs_info->extent_root;
 	struct btrfs_block_group_item item;
 	struct btrfs_key key;
 	int ret = 0;
+	bool can_flush_pending_bgs = trans->can_flush_pending_bgs;
 
-	list_for_each_entry_safe(block_group, tmp, &trans->new_bgs, bg_list) {
+	trans->can_flush_pending_bgs = false;
+	while (!list_empty(&trans->new_bgs)) {
+		block_group = list_first_entry(&trans->new_bgs,
+					       struct btrfs_block_group_cache,
+					       bg_list);
 		if (ret)
 			goto next;
 
@@ -9364,6 +9452,7 @@ void btrfs_create_pending_block_groups(struct btrfs_trans_handle *trans,
 next:
 		list_del_init(&block_group->bg_list);
 	}
+	trans->can_flush_pending_bgs = can_flush_pending_bgs;
 }
 
 int btrfs_make_block_group(struct btrfs_trans_handle *trans,

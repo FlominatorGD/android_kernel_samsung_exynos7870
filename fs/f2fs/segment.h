@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * fs/f2fs/segment.h
  *
@@ -16,6 +16,7 @@
 #define DEF_MAX_RECLAIM_PREFREE_SEGMENTS	4096	/* 8GB in maximum */
 
 #define F2FS_MIN_SEGMENTS	9 /* SB + 2 (CP + SIT + NAT) + SSA + MAIN */
+#define F2FS_MIN_META_SEGMENTS	8 /* SB + 2 (CP + SIT + NAT) + SSA */
 
 /* L: Logical segment # in volume, R: Relative segment # in main area */
 #define GET_L2R_SEGNO(free_i, segno)	((segno) - (free_i)->start_segno)
@@ -166,8 +167,11 @@ enum {
 struct victim_sel_policy {
 	int alloc_mode;			/* LFS or SSR */
 	int gc_mode;			/* GC_CB or GC_GREEDY */
-	unsigned long *dirty_segmap;	/* dirty segment bitmap */
-	unsigned int max_search;	/* maximum # of segments to search */
+	unsigned long *dirty_bitmap;	/* dirty segment/section bitmap */
+	unsigned int max_search;	/*
+					 * maximum # of segments/sections
+					 * to search
+					 */
 	unsigned int offset;		/* last scanned bitmap offset */
 	unsigned int ofs_unit;		/* bitmap search unit */
 	unsigned int min_cost;		/* minimum cost */
@@ -184,7 +188,7 @@ struct seg_entry {
 	unsigned char *cur_valid_map_mir;	/* mirror of current valid bitmap */
 #endif
 	/*
-	 * # of valid blocks and the validity bitmap stored in the the last
+	 * # of valid blocks and the validity bitmap stored in the last
 	 * checkpoint pack. This information is used by the SSR mode.
 	 */
 	unsigned char *ckpt_valid_map;	/* validity bitmap of blocks last cp */
@@ -226,9 +230,13 @@ struct sit_info {
 	block_t sit_base_addr;		/* start block address of SIT area */
 	block_t sit_blocks;		/* # of blocks used by SIT area */
 	block_t written_valid_blocks;	/* # of valid blocks in main area */
+	char *bitmap;			/* all bitmaps pointer */
 	char *sit_bitmap;		/* SIT bitmap pointer */
 #ifdef CONFIG_F2FS_CHECK_FS
 	char *sit_bitmap_mir;		/* SIT bitmap mirror */
+
+	/* bitmap of segments to be ignored by GC in case of errors */
+	unsigned long *invalid_segmap;
 #endif
 	unsigned int bitmap_size;	/* SIT bitmap size */
 
@@ -274,6 +282,7 @@ enum dirty_type {
 struct dirty_seglist_info {
 	const struct victim_selection *v_ops;	/* victim selction operation */
 	unsigned long *dirty_segmap[NR_DIRTY_TYPE];
+	unsigned long *dirty_secmap;
 	struct mutex seglist_lock;		/* lock for segment bitmaps */
 	int nr_dirty[NR_DIRTY_TYPE];		/* # of dirty segments */
 	unsigned long *victim_secmap;		/* background GC victims */
@@ -502,7 +511,7 @@ static inline unsigned int free_segments(struct f2fs_sb_info *sbi)
 	return FREE_I(sbi)->free_segments;
 }
 
-static inline int reserved_segments(struct f2fs_sb_info *sbi)
+static inline unsigned int reserved_segments(struct f2fs_sb_info *sbi)
 {
 	return SM_I(sbi)->reserved_segments;
 }
@@ -534,7 +543,7 @@ static inline int overprovision_segments(struct f2fs_sb_info *sbi)
 
 static inline int reserved_sections(struct f2fs_sb_info *sbi)
 {
-	return GET_SEC_FROM_SEG(sbi, (unsigned int)reserved_segments(sbi));
+	return GET_SEC_FROM_SEG(sbi, reserved_segments(sbi));
 }
 
 static inline bool has_curseg_enough_space(struct f2fs_sb_info *sbi)
@@ -614,6 +623,7 @@ static inline int utilization(struct f2fs_sb_info *sbi)
  * F2FS_IPU_FSYNC - activated in fsync path only for high performance flash
  *                     storages. IPU will be triggered only if the # of dirty
  *                     pages over min_fsync_blocks.
+ * F2FS_IPU_NOCACHE - disable IPU bio cache.
  * F2FS_IPUT_DISABLE - disable IPU. (=default option)
  */
 #define DEF_MIN_IPU_UTIL	70
@@ -629,6 +639,7 @@ enum {
 	F2FS_IPU_SSR_UTIL,
 	F2FS_IPU_FSYNC,
 	F2FS_IPU_ASYNC,
+	F2FS_IPU_NOCACHE,
 };
 
 static inline unsigned int curseg_segno(struct f2fs_sb_info *sbi,

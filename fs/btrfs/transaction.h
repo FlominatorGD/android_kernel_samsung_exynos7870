@@ -90,6 +90,7 @@ struct btrfs_transaction {
 struct btrfs_trans_handle {
 	u64 transid;
 	u64 bytes_reserved;
+	u64 chunk_bytes_reserved;
 	u64 qgroup_reserved;
 	unsigned long use_count;
 	unsigned long blocks_reserved;
@@ -100,6 +101,7 @@ struct btrfs_trans_handle {
 	short aborted;
 	short adding_csums;
 	bool allocating_chunk;
+	bool can_flush_pending_bgs;
 	bool reloc_reserved;
 	bool sync;
 	bool dirty;
@@ -134,9 +136,11 @@ struct btrfs_pending_snapshot {
 static inline void btrfs_set_inode_last_trans(struct btrfs_trans_handle *trans,
 					      struct inode *inode)
 {
+	spin_lock(&BTRFS_I(inode)->lock);
 	BTRFS_I(inode)->last_trans = trans->transaction->transid;
 	BTRFS_I(inode)->last_sub_trans = BTRFS_I(inode)->root->log_transid;
 	BTRFS_I(inode)->last_log_commit = BTRFS_I(inode)->root->last_log_commit;
+	spin_unlock(&BTRFS_I(inode)->lock);
 }
 
 int btrfs_end_transaction(struct btrfs_trans_handle *trans,

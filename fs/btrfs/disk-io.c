@@ -418,12 +418,6 @@ static int btrfs_check_super_csum(char *raw_disk_sb)
 
 		if (memcmp(raw_disk_sb, result, csum_size))
 			ret = 1;
-
-		if (ret && btrfs_super_generation(disk_sb) < 10) {
-			printk(KERN_WARNING
-				"BTRFS: super block crcs don't match, older mkfs detected\n");
-			ret = 0;
-		}
 	}
 
 	if (csum_type >= ARRAY_SIZE(btrfs_csum_sizes)) {
@@ -2603,6 +2597,9 @@ int open_ctree(struct super_block *sb,
 	    !test_bit(EXTENT_BUFFER_UPTODATE, &chunk_root->node->bflags)) {
 		printk(KERN_WARNING "BTRFS: failed to read chunk root on %s\n",
 		       sb->s_id);
+		if (!IS_ERR(chunk_root->node))
+			free_extent_buffer(chunk_root->node);
+		chunk_root->node = NULL;
 		goto fail_tree_roots;
 	}
 	btrfs_set_root_node(&chunk_root->root_item, chunk_root->node);
@@ -2640,7 +2637,9 @@ retry_root_backup:
 	    !test_bit(EXTENT_BUFFER_UPTODATE, &tree_root->node->bflags)) {
 		printk(KERN_WARNING "BTRFS: failed to read tree root on %s\n",
 		       sb->s_id);
-
+		if (!IS_ERR(tree_root->node))
+			free_extent_buffer(tree_root->node);
+		tree_root->node = NULL;
 		goto recovery_tree_root;
 	}
 
