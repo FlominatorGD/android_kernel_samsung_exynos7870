@@ -542,6 +542,21 @@ void shmem_truncate_range(struct inode *inode, loff_t lstart, loff_t lend)
 }
 EXPORT_SYMBOL_GPL(shmem_truncate_range);
 
+static int shmem_getattr(struct vfsmount *mnt, struct dentry *dentry,
+			 struct kstat *stat)
+{
+	struct inode *inode = dentry->d_inode;
+	struct shmem_inode_info *info = SHMEM_I(inode);
+
+	if (info->alloced - info->swapped != inode->i_mapping->nrpages) {
+		spin_lock(&info->lock);
+		shmem_recalc_inode(inode);
+		spin_unlock(&info->lock);
+	}
+	generic_fillattr(inode, stat);
+	return 0;
+}
+
 static int shmem_setattr(struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;
@@ -569,12 +584,18 @@ static int shmem_setattr(struct dentry *dentry, struct iattr *attr)
 			i_size_write(inode, newsize);
 			inode->i_ctime = inode->i_mtime = CURRENT_TIME;
 		}
-		if (newsize < oldsize) {
+		if (newsize <= oldsize) {
 			loff_t holebegin = round_up(newsize, PAGE_SIZE);
-			unmap_mapping_range(inode->i_mapping, holebegin, 0, 1);
-			shmem_truncate_range(inode, newsize, (loff_t)-1);
+			if (oldsize > holebegin)
+				unmap_mapping_range(inode->i_mapping,
+							holebegin, 0, 1);
+			if (info->alloced)
+				shmem_truncate_range(inode,
+							newsize, (loff_t)-1);
 			/* unmap again to remove racily COWed private pages */
-			unmap_mapping_range(inode->i_mapping, holebegin, 0, 1);
+			if (oldsize > holebegin)
+				unmap_mapping_range(inode->i_mapping,
+							holebegin, 0, 1);
 		}
 	}
 
@@ -3142,6 +3163,7 @@ static const struct file_operations shmem_file_operations = {
 };
 
 static const struct inode_operations shmem_inode_operations = {
+	.getattr	= shmem_getattr,
 	.setattr	= shmem_setattr,
 #ifdef CONFIG_TMPFS_XATTR
 	.setxattr	= shmem_setxattr,

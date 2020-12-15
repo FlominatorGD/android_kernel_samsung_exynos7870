@@ -162,12 +162,6 @@ static const struct mempolicy_operations {
 			enum mpol_rebind_step step);
 } mpol_ops[MPOL_MAX];
 
-/* Check that the nodemask contains at least one populated zone */
-static int is_valid_nodemask(const nodemask_t *nodemask)
-{
-	return nodes_intersects(*nodemask, node_states[N_MEMORY]);
-}
-
 static inline int mpol_store_user_nodemask(const struct mempolicy *pol)
 {
 	return pol->flags & MPOL_MODE_FLAGS;
@@ -202,7 +196,7 @@ static int mpol_new_preferred(struct mempolicy *pol, const nodemask_t *nodes)
 
 static int mpol_new_bind(struct mempolicy *pol, const nodemask_t *nodes)
 {
-	if (!is_valid_nodemask(nodes))
+	if (nodes_empty(*nodes))
 		return -EINVAL;
 	pol->v.nodes = *nodes;
 	return 0;
@@ -234,7 +228,7 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 		nodes = NULL;	/* explicit local allocation */
 	else {
 		if (pol->flags & MPOL_F_RELATIVE_NODES)
-			mpol_relative_nodemask(&nsc->mask2, nodes,&nsc->mask1);
+			mpol_relative_nodemask(&nsc->mask2, nodes, &nsc->mask1);
 		else
 			nodes_and(nsc->mask2, *nodes, nsc->mask1);
 
@@ -601,6 +595,9 @@ static int queue_pages_test_walk(unsigned long start, unsigned long end,
 	unsigned long endvma = vma->vm_end;
 	unsigned long flags = qp->flags;
 
+	if (vma->vm_flags & VM_PFNMAP)
+		return 1;
+
 	if (endvma > end)
 		endvma = end;
 	if (vma->vm_start > start)
@@ -614,9 +611,6 @@ static int queue_pages_test_walk(unsigned long start, unsigned long end,
 	}
 
 	qp->prev = vma;
-
-	if (vma->vm_flags & VM_PFNMAP)
-		return 1;
 
 	if (flags & MPOL_MF_LAZY) {
 		/* Similar to task_numa_work, skip inaccessible VMAs */
@@ -947,7 +941,8 @@ static struct page *new_node_page(struct page *page, unsigned long node, int **x
 		return alloc_huge_page_node(page_hstate(compound_head(page)),
 					node);
 	else
-		return alloc_pages_exact_node(node, GFP_HIGHUSER_MOVABLE, 0);
+		return __alloc_pages_node(node, GFP_HIGHUSER_MOVABLE |
+						    __GFP_THISNODE, 0);
 }
 
 /*
@@ -1966,43 +1961,98 @@ static struct page *alloc_page_interleave(gfp_t gfp, unsigned order,
  *	@order:Order of the GFP allocation.
  * 	@vma:  Pointer to VMA or NULL if not available.
  *	@addr: Virtual Address of the allocation. Must be inside the VMA.
+ *	@node: Which node to prefer for allocation (modulo policy).
+ *	@hugepage: for hugepages try only the preferred node if possible
  *
  * 	This function allocates a page from the kernel page pool and applies
  *	a NUMA policy associated with the VMA or the current process.
  *	When VMA is not NULL caller must hold down_read on the mmap_sem of the
  *	mm_struct of the VMA to prevent it from going away. Should be used for
- *	all allocations for pages that will be mapped into
- * 	user space. Returns NULL when no page can be allocated.
- *
- *	Should be called with the mm_sem of the vma hold.
+ *	all allocations for pages that will be mapped into user space. Returns
+ *	NULL when no page can be allocated.
  */
 struct page *
 alloc_pages_vma(gfp_t gfp, int order, struct vm_area_struct *vma,
-		unsigned long addr, int node)
+		unsigned long addr, int node, bool hugepage)
 {
 	struct mempolicy *pol;
 	struct page *page;
 	unsigned int cpuset_mems_cookie;
+	struct zonelist *zl;
+	nodemask_t *nmask;
 
 retry_cpuset:
 	pol = get_vma_policy(vma, addr);
 	cpuset_mems_cookie = read_mems_allowed_begin();
 
-	if (unlikely(pol->mode == MPOL_INTERLEAVE)) {
+	if (pol->mode == MPOL_INTERLEAVE) {
 		unsigned nid;
 
 		nid = interleave_nid(pol, vma, addr, PAGE_SHIFT + order);
 		mpol_cond_put(pol);
 		page = alloc_page_interleave(gfp, order, nid);
-		if (unlikely(!page && read_mems_allowed_retry(cpuset_mems_cookie)))
-			goto retry_cpuset;
-
-		return page;
+		goto out;
 	}
-	page = __alloc_pages_nodemask(gfp, order,
-				      policy_zonelist(gfp, pol, node),
-				      policy_nodemask(gfp, pol));
+
+	if (unlikely(IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) && hugepage)) {
+		int hpage_node = node;
+
+		/*
+		 * For hugepage allocation and non-interleave policy which
+		 * allows the current node (or other explicitly preferred
+		 * node) we only try to allocate from the current/preferred
+		 * node and don't fall back to other nodes, as the cost of
+		 * remote accesses would likely offset THP benefits.
+		 *
+		 * If the policy is interleave, or does not allow the current
+		 * node in its nodemask, we allocate the standard way.
+		 */
+		if (pol->mode == MPOL_PREFERRED &&
+						!(pol->flags & MPOL_F_LOCAL))
+			hpage_node = pol->v.preferred_node;
+
+		nmask = policy_nodemask(gfp, pol);
+		if (!nmask || node_isset(hpage_node, *nmask)) {
+			mpol_cond_put(pol);
+			/*
+			 * We cannot invoke reclaim if __GFP_THISNODE
+			 * is set. Invoking reclaim with
+			 * __GFP_THISNODE set, would cause THP
+			 * allocations to trigger heavy swapping
+			 * despite there may be tons of free memory
+			 * (including potentially plenty of THP
+			 * already available in the buddy) on all the
+			 * other NUMA nodes.
+			 *
+			 * At most we could invoke compaction when
+			 * __GFP_THISNODE is set (but we would need to
+			 * refrain from invoking reclaim even if
+			 * compaction returned COMPACT_SKIPPED because
+			 * there wasn't not enough memory to succeed
+			 * compaction). For now just avoid
+			 * __GFP_THISNODE instead of limiting the
+			 * allocation path to a strict and single
+			 * compaction invocation.
+			 *
+			 * Supposedly if direct reclaim was enabled by
+			 * the caller, the app prefers THP regardless
+			 * of the node it comes from so this would be
+			 * more desiderable behavior than only
+			 * providing THP originated from the local
+			 * node in such case.
+			 */
+			if (!(gfp & __GFP_DIRECT_RECLAIM))
+				gfp |= __GFP_THISNODE;
+			page = __alloc_pages_node(hpage_node, gfp, order);
+			goto out;
+		}
+	}
+
+	nmask = policy_nodemask(gfp, pol);
+	zl = policy_zonelist(gfp, pol, node);
+	page = __alloc_pages_nodemask(gfp, order, zl, nmask);
 	mpol_cond_put(pol);
+out:
 	if (unlikely(!page && read_mems_allowed_retry(cpuset_mems_cookie)))
 		goto retry_cpuset;
 	return page;
@@ -2823,8 +2873,7 @@ void mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol)
 			p += snprintf(p, buffer + maxlen - p, "relative");
 	}
 
-	if (!nodes_empty(nodes)) {
-		p += snprintf(p, buffer + maxlen - p, ":");
-	 	p += nodelist_scnprintf(p, buffer + maxlen - p, nodes);
-	}
+	if (!nodes_empty(nodes))
+		p += scnprintf(p, buffer + maxlen - p, ":%*pbl",
+			       nodemask_pr_args(&nodes));
 }

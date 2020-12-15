@@ -1327,7 +1327,7 @@ static inline struct page *alloc_slab_page(struct kmem_cache *s,
 	if (node == NUMA_NO_NODE)
 		page = alloc_pages(flags, order);
 	else
-		page = alloc_pages_exact_node(node, flags, order);
+		page = __alloc_pages_node(node, flags, order);
 
 	if (!page)
 		memcg_uncharge_slab(s, order);
@@ -2438,13 +2438,25 @@ redo:
 	 * reading from one cpu area. That does not matter as long
 	 * as we end up on the original cpu again when doing the cmpxchg.
 	 *
-	 * Preemption is disabled for the retrieval of the tid because that
-	 * must occur from the current processor. We cannot allow rescheduling
-	 * on a different processor between the determination of the pointer
-	 * and the retrieval of the tid.
+	 * We should guarantee that tid and kmem_cache are retrieved on
+	 * the same cpu. It could be different if CONFIG_PREEMPT so we need
+	 * to check if it is matched or not.
 	 */
-	preempt_disable();
-	c = this_cpu_ptr(s->cpu_slab);
+	do {
+		tid = this_cpu_read(s->cpu_slab->tid);
+		c = raw_cpu_ptr(s->cpu_slab);
+	} while (IS_ENABLED(CONFIG_PREEMPT) &&
+		 unlikely(tid != READ_ONCE(c->tid)));
+
+	/*
+	 * Irqless object alloc/free algorithm used here depends on sequence
+	 * of fetching cpu_slab's data. tid should be fetched before anything
+	 * on c to guarantee that object and page associated with previous tid
+	 * won't be used with current tid. If we fetch tid first, object and
+	 * page could be one associated with next tid and our alloc/free
+	 * request will be failed. In this case, we will retry. So, no problem.
+	 */
+	barrier();
 
 	/*
 	 * The transaction ids are globally unique per cpu and per operation on
@@ -2452,8 +2464,6 @@ redo:
 	 * occurs on the right processor and that there was no operation on the
 	 * linked list in between.
 	 */
-	tid = c->tid;
-	preempt_enable();
 
 	object = c->freelist;
 	page = c->page;
@@ -2552,7 +2562,7 @@ EXPORT_SYMBOL(kmem_cache_alloc_node_trace);
 #endif
 
 /*
- * Slow patch handling. This may still be called frequently since objects
+ * Slow path handling. This may still be called frequently since objects
  * have a longer lifetime than the cpu slabs in most processing loads.
  *
  * So we still attempt to reduce cache line usage. Just take the slab
@@ -2699,11 +2709,14 @@ redo:
 	 * data is retrieved via this pointer. If we are on the same cpu
 	 * during the cmpxchg then the free will succedd.
 	 */
-	preempt_disable();
-	c = this_cpu_ptr(s->cpu_slab);
+	do {
+		tid = this_cpu_read(s->cpu_slab->tid);
+		c = raw_cpu_ptr(s->cpu_slab);
+	} while (IS_ENABLED(CONFIG_PREEMPT) &&
+		 unlikely(tid != READ_ONCE(c->tid)));
 
-	tid = c->tid;
-	preempt_enable();
+	/* Same with comment on barrier() in slab_alloc_node() */
+	barrier();
 
 	if (likely(page == c->page)) {
 		void **freelist = READ_ONCE(c->freelist);

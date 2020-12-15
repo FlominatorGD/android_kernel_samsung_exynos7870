@@ -67,6 +67,7 @@ static unsigned int khugepaged_max_ptes_none __read_mostly = HPAGE_PMD_NR-1;
 
 static int khugepaged(void *none);
 static int khugepaged_slab_init(void);
+static void khugepaged_slab_exit(void);
 
 #define MM_SLOTS_HASH_BITS 10
 static __read_mostly DEFINE_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
@@ -109,9 +110,6 @@ static void set_recommended_min_free_kbytes(void)
 	int nr_zones = 0;
 	unsigned long recommended_min;
 
-	if (!khugepaged_enabled())
-		return 0;
-
 	for_each_populated_zone(zone)
 		nr_zones++;
 
@@ -142,9 +140,8 @@ static void set_recommended_min_free_kbytes(void)
 	}
 	setup_per_zone_wmarks();
 }
-late_initcall(set_recommended_min_free_kbytes);
 
-static int start_khugepaged(void)
+static int start_stop_khugepaged(void)
 {
 	int err = 0;
 	if (khugepaged_enabled()) {
@@ -155,6 +152,7 @@ static int start_khugepaged(void)
 			pr_err("khugepaged: kthread_run(khugepaged) failed\n");
 			err = PTR_ERR(khugepaged_thread);
 			khugepaged_thread = NULL;
+			goto fail;
 		}
 
 		if (!list_empty(&khugepaged_scan.mm_head))
@@ -165,7 +163,7 @@ static int start_khugepaged(void)
 		kthread_stop(khugepaged_thread);
 		khugepaged_thread = NULL;
 	}
-
+fail:
 	return err;
 }
 
@@ -304,7 +302,7 @@ static ssize_t enabled_store(struct kobject *kobj,
 		int err;
 
 		mutex_lock(&khugepaged_mutex);
-		err = start_khugepaged();
+		err = start_stop_khugepaged();
 		mutex_unlock(&khugepaged_mutex);
 
 		if (err)
@@ -638,27 +636,38 @@ static int __init hugepage_init(void)
 
 	err = hugepage_init_sysfs(&hugepage_kobj);
 	if (err)
-		return err;
+		goto err_sysfs;
 
 	err = khugepaged_slab_init();
 	if (err)
-		goto out;
+		goto err_slab;
 
-	register_shrinker(&huge_zero_page_shrinker);
+	err = register_shrinker(&huge_zero_page_shrinker);
+	if (err)
+		goto err_hzp_shrinker;
 
 	/*
 	 * By default disable transparent hugepages on smaller systems,
 	 * where the extra memory used could hurt more than TLB overhead
 	 * is likely to save.  The admin can still enable it through /sys.
 	 */
-	if (totalram_pages < (512 << (20 - PAGE_SHIFT)))
+	if (totalram_pages < (512 << (20 - PAGE_SHIFT))) {
 		transparent_hugepage_flags = 0;
+		return 0;
+	}
 
-	start_khugepaged();
+	err = start_stop_khugepaged();
+	if (err)
+		goto err_khugepaged;
 
 	return 0;
-out:
+err_khugepaged:
+	unregister_shrinker(&huge_zero_page_shrinker);
+err_hzp_shrinker:
+	khugepaged_slab_exit();
+err_slab:
 	hugepage_exit_sysfs(hugepage_kobj);
+err_sysfs:
 	return err;
 }
 subsys_initcall(hugepage_init);
@@ -712,7 +721,7 @@ static inline pmd_t mk_huge_pmd(struct page *page, pgprot_t prot)
 static int __do_huge_pmd_anonymous_page(struct mm_struct *mm,
 					struct vm_area_struct *vma,
 					unsigned long haddr, pmd_t *pmd,
-					struct page *page)
+					struct page *page, gfp_t gfp)
 {
 	struct mem_cgroup *memcg;
 	pgtable_t pgtable;
@@ -720,7 +729,7 @@ static int __do_huge_pmd_anonymous_page(struct mm_struct *mm,
 
 	VM_BUG_ON_PAGE(!PageCompound(page), page);
 
-	if (mem_cgroup_try_charge(page, mm, GFP_TRANSHUGE, &memcg))
+	if (mem_cgroup_try_charge(page, mm, gfp, &memcg))
 		return VM_FAULT_OOM;
 
 	pgtable = pte_alloc_one(mm, haddr);
@@ -765,15 +774,6 @@ static inline gfp_t alloc_hugepage_gfpmask(int defrag, gfp_t extra_gfp)
 	return (GFP_TRANSHUGE & ~(defrag ? 0 : __GFP_WAIT)) | extra_gfp;
 }
 
-static inline struct page *alloc_hugepage_vma(int defrag,
-					      struct vm_area_struct *vma,
-					      unsigned long haddr, int nd,
-					      gfp_t extra_gfp)
-{
-	return alloc_pages_vma(alloc_hugepage_gfpmask(defrag, extra_gfp),
-			       HPAGE_PMD_ORDER, vma, haddr, nd);
-}
-
 /* Caller must hold page table lock. */
 static bool set_huge_zero_page(pgtable_t pgtable, struct mm_struct *mm,
 		struct vm_area_struct *vma, unsigned long haddr, pmd_t *pmd,
@@ -795,6 +795,7 @@ int do_huge_pmd_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			       unsigned long address, pmd_t *pmd,
 			       unsigned int flags)
 {
+	gfp_t gfp;
 	struct page *page;
 	unsigned long haddr = address & HPAGE_PMD_MASK;
 
@@ -829,13 +830,13 @@ int do_huge_pmd_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		}
 		return 0;
 	}
-	page = alloc_hugepage_vma(transparent_hugepage_defrag(vma),
-			vma, haddr, numa_node_id(), 0);
+	gfp = alloc_hugepage_gfpmask(transparent_hugepage_defrag(vma), 0);
+	page = alloc_hugepage_vma(gfp, vma, haddr, HPAGE_PMD_ORDER);
 	if (unlikely(!page)) {
 		count_vm_event(THP_FAULT_FALLBACK);
 		return VM_FAULT_FALLBACK;
 	}
-	if (unlikely(__do_huge_pmd_anonymous_page(mm, vma, haddr, pmd, page))) {
+	if (unlikely(__do_huge_pmd_anonymous_page(mm, vma, haddr, pmd, page, gfp))) {
 		put_page(page);
 		count_vm_event(THP_FAULT_FALLBACK);
 		return VM_FAULT_FALLBACK;
@@ -1093,6 +1094,7 @@ int do_huge_pmd_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	unsigned long haddr;
 	unsigned long mmun_start;	/* For mmu_notifiers */
 	unsigned long mmun_end;		/* For mmu_notifiers */
+	gfp_t huge_gfp;			/* for allocation and charge */
 
 	ptl = pmd_lockptr(mm, pmd);
 	VM_BUG_ON_VMA(!vma->anon_vma, vma);
@@ -1118,10 +1120,10 @@ int do_huge_pmd_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	spin_unlock(ptl);
 alloc:
 	if (transparent_hugepage_enabled(vma) &&
-	    !transparent_hugepage_debug_cow())
-		new_page = alloc_hugepage_vma(transparent_hugepage_defrag(vma),
-					      vma, haddr, numa_node_id(), 0);
-	else
+	    !transparent_hugepage_debug_cow()) {
+		huge_gfp = alloc_hugepage_gfpmask(transparent_hugepage_defrag(vma), 0);
+		new_page = alloc_hugepage_vma(huge_gfp, vma, haddr, HPAGE_PMD_ORDER);
+	} else
 		new_page = NULL;
 
 	if (unlikely(!new_page)) {
@@ -1141,8 +1143,7 @@ alloc:
 		goto out;
 	}
 
-	if (unlikely(mem_cgroup_try_charge(new_page, mm,
-					   GFP_TRANSHUGE, &memcg))) {
+	if (unlikely(mem_cgroup_try_charge(new_page, mm, huge_gfp, &memcg))) {
 		put_page(new_page);
 		if (page) {
 			split_huge_page(page);
@@ -2017,6 +2018,11 @@ static int __init khugepaged_slab_init(void)
 	return 0;
 }
 
+static void __init khugepaged_slab_exit(void)
+{
+	kmem_cache_destroy(mm_slot_cache);
+}
+
 static inline struct mm_slot *alloc_mm_slot(void)
 {
 	if (!mm_slot_cache)	/* initialization failed */
@@ -2049,7 +2055,7 @@ static void insert_to_mm_slots_hash(struct mm_struct *mm,
 
 static inline int khugepaged_test_exit(struct mm_struct *mm)
 {
-	return atomic_read(&mm->mm_users) == 0 || !mmget_still_valid(mm);
+	return atomic_read(&mm->mm_users) == 0;
 }
 
 int __khugepaged_enter(struct mm_struct *mm)
@@ -2330,10 +2336,9 @@ static bool khugepaged_prealloc_page(struct page **hpage, bool *wait)
 	return true;
 }
 
-static struct page
-*khugepaged_alloc_page(struct page **hpage, struct mm_struct *mm,
-		       struct vm_area_struct *vma, unsigned long address,
-		       int node)
+static struct page *
+khugepaged_alloc_page(struct page **hpage, gfp_t gfp, struct mm_struct *mm,
+		       unsigned long address, int node)
 {
 	VM_BUG_ON_PAGE(*hpage, *hpage);
 
@@ -2345,8 +2350,7 @@ static struct page
 	 */
 	up_read(&mm->mmap_sem);
 
-	*hpage = alloc_pages_exact_node(node, alloc_hugepage_gfpmask(
-		khugepaged_defrag(), __GFP_OTHER_NODE), HPAGE_PMD_ORDER);
+	*hpage = __alloc_pages_node(node, gfp, HPAGE_PMD_ORDER);
 	if (unlikely(!*hpage)) {
 		count_vm_event(THP_COLLAPSE_ALLOC_FAILED);
 		*hpage = ERR_PTR(-ENOMEM);
@@ -2399,13 +2403,13 @@ static bool khugepaged_prealloc_page(struct page **hpage, bool *wait)
 	return true;
 }
 
-static struct page
-*khugepaged_alloc_page(struct page **hpage, struct mm_struct *mm,
-		       struct vm_area_struct *vma, unsigned long address,
-		       int node)
+static struct page *
+khugepaged_alloc_page(struct page **hpage, gfp_t gfp, struct mm_struct *mm,
+		       unsigned long address, int node)
 {
 	up_read(&mm->mmap_sem);
 	VM_BUG_ON(!*hpage);
+
 	return  *hpage;
 }
 #endif
@@ -2439,16 +2443,21 @@ static void collapse_huge_page(struct mm_struct *mm,
 	struct mem_cgroup *memcg;
 	unsigned long mmun_start;	/* For mmu_notifiers */
 	unsigned long mmun_end;		/* For mmu_notifiers */
+	gfp_t gfp;
 
 	VM_BUG_ON(address & ~HPAGE_PMD_MASK);
 
+	/* Only allocate from the target node */
+	gfp = alloc_hugepage_gfpmask(khugepaged_defrag(), __GFP_OTHER_NODE) |
+		__GFP_THISNODE;
+
 	/* release the mmap_sem read lock. */
-	new_page = khugepaged_alloc_page(hpage, mm, vma, address, node);
+	new_page = khugepaged_alloc_page(hpage, gfp, mm, address, node);
 	if (!new_page)
 		return;
 
 	if (unlikely(mem_cgroup_try_charge(new_page, mm,
-					   GFP_TRANSHUGE, &memcg)))
+					   gfp, &memcg)))
 		return;
 
 	/*
