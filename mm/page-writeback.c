@@ -967,6 +967,7 @@ static void bdi_update_dirty_ratelimit(struct backing_dev_info *bdi,
 	unsigned long pos_ratio;
 	unsigned long step;
 	unsigned long x;
+	unsigned long shift;
 
 	/*
 	 * The dirty rate will match the writeout rate in long term, except
@@ -1094,11 +1095,11 @@ static void bdi_update_dirty_ratelimit(struct backing_dev_info *bdi,
 	 * rate itself is constantly fluctuating. So decrease the track speed
 	 * when it gets close to the target. Helps eliminate pointless tremors.
 	 */
-	step >>= dirty_ratelimit / (2 * step + 1);
-	/*
-	 * Limit the tracking speed to avoid overshooting.
-	 */
-	step = (step + 7) / 8;
+	shift = dirty_ratelimit / (2 * step + 1);
+	if (shift < BITS_PER_LONG)
+		step = DIV_ROUND_UP(step >> shift, 8);
+	else
+		step = 0;
 
 	if (dirty_ratelimit < balanced_dirty_ratelimit)
 		dirty_ratelimit += step;
@@ -2091,6 +2092,25 @@ void account_page_dirtied(struct page *page, struct address_space *mapping)
 	}
 }
 EXPORT_SYMBOL(account_page_dirtied);
+
+/*
+ * Helper function for deaccounting dirty page without writeback.
+ *
+ * Doing this should *normally* only ever be done when a page
+ * is truncated, and is not actually mapped anywhere at all. However,
+ * fs/buffer.c does this when it notices that somebody has cleaned
+ * out all the buffers on a page without actually doing it through
+ * the VM. Can you say "ext3 is horribly ugly"? Thought you could.
+ */
+void account_page_cleaned(struct page *page, struct address_space *mapping)
+{
+	if (mapping_cap_account_dirty(mapping)) {
+		dec_zone_page_state(page, NR_FILE_DIRTY);
+		dec_bdi_stat(inode_to_bdi(mapping->host), BDI_RECLAIMABLE);
+		task_io_account_cancelled_write(PAGE_CACHE_SIZE);
+	}
+}
+EXPORT_SYMBOL(account_page_cleaned);
 
 /*
  * For address_spaces which do not use buffers.  Just tag the page as dirty in

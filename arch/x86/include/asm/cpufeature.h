@@ -249,6 +249,7 @@
 #define X86_BUG_11AP		X86_BUG(5) /* Bad local APIC aka 11AP */
 #define X86_BUG_FXSAVE_LEAK	X86_BUG(6) /* FXSAVE leaks FOP/FIP/FOP */
 #define X86_BUG_CLFLUSH_MONITOR	X86_BUG(7) /* AAI65, CLFLUSH required before MONITOR */
+#define X86_BUG_CPU_MELTDOWN	X86_BUG(14) /* CPU is affected by meltdown attack and needs kernel page table isolation */
 
 #if defined(__KERNEL__) && !defined(__ASSEMBLY__)
 
@@ -330,6 +331,8 @@ extern const char * const x86_bug_flags[NBUGINTS*32];
 	set_cpu_cap(&boot_cpu_data, bit);	\
 	set_bit(bit, (unsigned long *)cpu_caps_set);	\
 } while (0)
+
+#define setup_force_cpu_bug(bit) setup_force_cpu_cap(bit)
 
 #define cpu_has_fpu		boot_cpu_has(X86_FEATURE_FPU)
 #define cpu_has_de		boot_cpu_has(X86_FEATURE_DE)
