@@ -1395,7 +1395,10 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		 */
 		sk->sk_prot = sk->sk_prot_creator = prot;
 		sock_lock_init(sk);
-		sock_net_set(sk, get_net(net));
+		sk->sk_net_refcnt = kern ? 0 : 1;
+		if (likely(sk->sk_net_refcnt))
+			get_net(net);
+		sock_net_set(sk, net);
 		atomic_set(&sk->sk_wmem_alloc, 1);
 
 		sock_update_classid(sk);
@@ -1435,7 +1438,8 @@ static void __sk_free(struct sock *sk)
 	if (sk->sk_peer_cred)
 		put_cred(sk->sk_peer_cred);
 	put_pid(sk->sk_peer_pid);
-	put_net(sock_net(sk));
+	if (likely(sk->sk_net_refcnt))
+		put_net(sock_net(sk));
 	sk_prot_free(sk->sk_prot_creator, sk);
 }
 
@@ -1450,26 +1454,6 @@ void sk_free(struct sock *sk)
 		__sk_free(sk);
 }
 EXPORT_SYMBOL(sk_free);
-
-/*
- * Last sock_put should drop reference to sk->sk_net. It has already
- * been dropped in sk_change_net. Taking reference to stopping namespace
- * is not an option.
- * Take reference to a socket to remove it from hash _alive_ and after that
- * destroy it in the context of init_net.
- */
-void sk_release_kernel(struct sock *sk)
-{
-	if (sk == NULL || sk->sk_socket == NULL)
-		return;
-
-	sock_hold(sk);
-	sock_release(sk->sk_socket);
-	release_net(sock_net(sk));
-	sock_net_set(sk, get_net(&init_net));
-	sock_put(sk);
-}
-EXPORT_SYMBOL(sk_release_kernel);
 
 static void sk_update_clone(const struct sock *sk, struct sock *newsk)
 {
@@ -1498,7 +1482,8 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		newsk->sk_prot_creator = sk->sk_prot;
 
 		/* SANITY */
-		get_net(sock_net(newsk));
+		if (likely(newsk->sk_net_refcnt))
+			get_net(sock_net(newsk));
 		sk_node_init(&newsk->sk_node);
 		sock_lock_init(newsk);
 		bh_lock_sock(newsk);
