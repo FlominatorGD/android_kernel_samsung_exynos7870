@@ -459,7 +459,14 @@ static int rsnd_ssi_dma_probe(struct rsnd_mod *mod,
 static int rsnd_ssi_dma_remove(struct rsnd_mod *mod,
 			       struct rsnd_dai *rdai)
 {
+	struct rsnd_dai_stream *io = rsnd_mod_to_io(mod);
+	struct rsnd_mod *pure_ssi_mod = rsnd_io_to_mod_ssi(io);
+
 	rsnd_dma_quit(rsnd_mod_to_priv(mod), rsnd_mod_to_dma(mod));
+
+	/* Do nothing if non SSI (= SSI parent, multi SSI) mod */
+	if (pure_ssi_mod != mod)
+		return 0;
 
 	return 0;
 }
