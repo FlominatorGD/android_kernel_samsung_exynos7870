@@ -202,12 +202,39 @@ static int cx_auto_init(struct hda_codec *codec)
 	return 0;
 }
 
-#define cx_auto_free	snd_hda_gen_free
+static void cx_auto_reboot_notify(struct hda_codec *codec)
+{
+	struct conexant_spec *spec = codec->spec;
+
+	switch (codec->core.vendor_id) {
+	case 0x14f12008: /* CX8200 */
+	case 0x14f150f2: /* CX20722 */
+	case 0x14f150f4: /* CX20724 */
+		break;
+	default:
+		return;
+	}
+
+	/* Turn the problematic codec into D3 to avoid spurious noises
+	   from the internal speaker during (and after) reboot */
+	cx_auto_turn_eapd(codec, spec->num_eapds, spec->eapds, false);
+
+	snd_hda_codec_set_power_to_all(codec, codec->core.afg, AC_PWRST_D3);
+	snd_hda_codec_write(codec, codec->core.afg, 0,
+			    AC_VERB_SET_POWER_STATE, AC_PWRST_D3);
+}
+
+static void cx_auto_free(struct hda_codec *codec)
+{
+	cx_auto_reboot_notify(codec);
+	snd_hda_gen_free(codec);
+}
 
 static const struct hda_codec_ops cx_auto_patch_ops = {
 	.build_controls = cx_auto_build_controls,
 	.build_pcms = snd_hda_gen_build_pcms,
 	.init = cx_auto_init,
+	.reboot_notify = cx_auto_reboot_notify,
 	.free = cx_auto_free,
 	.unsol_event = snd_hda_jack_unsol_event,
 #ifdef CONFIG_PM
@@ -828,6 +855,8 @@ static const struct snd_pci_quirk cxt5066_fixups[] = {
 	SND_PCI_QUIRK(0x1025, 0x054c, "Acer Aspire 3830TG", CXT_FIXUP_ASPIRE_DMIC),
 	SND_PCI_QUIRK(0x1025, 0x054f, "Acer Aspire 4830T", CXT_FIXUP_ASPIRE_DMIC),
 	SND_PCI_QUIRK(0x103c, 0x8079, "HP EliteBook 840 G3", CXT_FIXUP_HP_DOCK),
+	SND_PCI_QUIRK(0x103c, 0x807C, "HP EliteBook 820 G3", CXT_FIXUP_HP_DOCK),
+	SND_PCI_QUIRK(0x103c, 0x80FD, "HP ProBook 640 G2", CXT_FIXUP_HP_DOCK),
 	SND_PCI_QUIRK(0x103c, 0x8174, "HP Spectre x360", CXT_FIXUP_HP_SPECTRE),
 	SND_PCI_QUIRK(0x103c, 0x8115, "HP Z1 Gen3", CXT_FIXUP_HP_GATE_MIC),
 	SND_PCI_QUIRK(0x1043, 0x138d, "Asus", CXT_FIXUP_HEADPHONE_MIC_PIN),
@@ -979,6 +1008,10 @@ static int patch_conexant_auto(struct hda_codec *codec)
  */
 
 static const struct hda_codec_preset snd_hda_preset_conexant[] = {
+	{ .id = 0x14f11f86, .name = "CX8070",
+	  .patch = patch_conexant_auto },
+	{ .id = 0x14f12008, .name = "CX8200",
+	  .patch = patch_conexant_auto },
 	{ .id = 0x14f15045, .name = "CX20549 (Venice)",
 	  .patch = patch_conexant_auto },
 	{ .id = 0x14f15047, .name = "CX20551 (Waikiki)",
