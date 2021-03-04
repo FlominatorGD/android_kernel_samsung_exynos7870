@@ -3,7 +3,7 @@
  *
  *  Copyright (C) 2008 Thomas Gleixner <tglx@linutronix.de>
  *  Copyright (C) 2008-2011 Red Hat, Inc., Ingo Molnar
- *  Copyright (C) 2008-2011 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
+ *  Copyright (C) 2008-2011 Red Hat, Inc., Peter Zijlstra
  *  Copyright  ©  2009 Paul Mackerras, IBM Corp. <paulus@au1.ibm.com>
  *
  * For licensing details see kernel-base/COPYING
@@ -35,7 +35,7 @@
 #include <linux/anon_inodes.h>
 #include <linux/kernel_stat.h>
 #include <linux/perf_event.h>
-#include <linux/ftrace_event.h>
+#include <linux/trace_events.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/mm_types.h>
 #include <linux/cgroup.h>
@@ -440,9 +440,15 @@ static inline void __update_cgrp_time(struct perf_cgroup *cgrp)
 
 static inline void update_cgrp_time_from_cpuctx(struct perf_cpu_context *cpuctx)
 {
-	struct perf_cgroup *cgrp_out = cpuctx->cgrp;
-	if (cgrp_out)
-		__update_cgrp_time(cgrp_out);
+	struct perf_cgroup *cgrp = cpuctx->cgrp;
+	struct cgroup_subsys_state *css;
+
+	if (cgrp) {
+		for (css = &cgrp->css; css; css = css->parent) {
+			cgrp = container_of(css, struct perf_cgroup, css);
+			__update_cgrp_time(cgrp);
+		}
+	}
 }
 
 static inline void update_cgrp_time_from_event(struct perf_event *event)
@@ -470,6 +476,7 @@ perf_cgroup_set_timestamp(struct task_struct *task,
 {
 	struct perf_cgroup *cgrp;
 	struct perf_cgroup_info *info;
+	struct cgroup_subsys_state *css;
 
 	/*
 	 * ctx->lock held by caller
@@ -480,8 +487,12 @@ perf_cgroup_set_timestamp(struct task_struct *task,
 		return;
 
 	cgrp = perf_cgroup_from_task(task);
-	info = this_cpu_ptr(cgrp->info);
-	info->timestamp = ctx->timestamp;
+
+	for (css = &cgrp->css; css; css = css->parent) {
+		cgrp = container_of(css, struct perf_cgroup, css);
+		info = this_cpu_ptr(cgrp->info);
+		info->timestamp = ctx->timestamp;
+	}
 }
 
 #define PERF_CGROUP_SWOUT	0x1 /* cgroup switch out every event */
@@ -510,7 +521,6 @@ void perf_cgroup_switch(struct task_struct *task, int mode)
 	 * we reschedule only in the presence of cgroup
 	 * constrained events.
 	 */
-	rcu_read_lock();
 
 	list_for_each_entry_rcu(pmu, &pmus, entry) {
 		cpuctx = this_cpu_ptr(pmu->pmu_cpu_context);
@@ -552,8 +562,6 @@ void perf_cgroup_switch(struct task_struct *task, int mode)
 		}
 	}
 
-	rcu_read_unlock();
-
 	local_irq_restore(flags);
 }
 
@@ -563,6 +571,7 @@ static inline void perf_cgroup_sched_out(struct task_struct *task,
 	struct perf_cgroup *cgrp1;
 	struct perf_cgroup *cgrp2 = NULL;
 
+	rcu_read_lock();
 	/*
 	 * we come here when we know perf_cgroup_events > 0
 	 */
@@ -582,6 +591,8 @@ static inline void perf_cgroup_sched_out(struct task_struct *task,
 	 */
 	if (cgrp1 != cgrp2)
 		perf_cgroup_switch(task, PERF_CGROUP_SWOUT);
+
+	rcu_read_unlock();
 }
 
 static inline void perf_cgroup_sched_in(struct task_struct *prev,
@@ -590,6 +601,7 @@ static inline void perf_cgroup_sched_in(struct task_struct *prev,
 	struct perf_cgroup *cgrp1;
 	struct perf_cgroup *cgrp2 = NULL;
 
+	rcu_read_lock();
 	/*
 	 * we come here when we know perf_cgroup_events > 0
 	 */
@@ -605,6 +617,8 @@ static inline void perf_cgroup_sched_in(struct task_struct *prev,
 	 */
 	if (cgrp1 != cgrp2)
 		perf_cgroup_switch(task, PERF_CGROUP_SWIN);
+
+	rcu_read_unlock();
 }
 
 static inline int perf_cgroup_connect(int fd, struct perf_event *event,
@@ -8751,7 +8765,9 @@ static void perf_cgroup_css_free(struct cgroup_subsys_state *css)
 static int __perf_cgroup_move(void *info)
 {
 	struct task_struct *task = info;
+	rcu_read_lock();
 	perf_cgroup_switch(task, PERF_CGROUP_SWOUT | PERF_CGROUP_SWIN);
+	rcu_read_unlock();
 	return 0;
 }
 

@@ -102,19 +102,6 @@ void get_online_cpus(void)
 }
 EXPORT_SYMBOL_GPL(get_online_cpus);
 
-bool try_get_online_cpus(void)
-{
-	if (cpu_hotplug.active_writer == current)
-		return true;
-	if (!mutex_trylock(&cpu_hotplug.lock))
-		return false;
-	cpuhp_lock_acquire_tryread();
-	atomic_inc(&cpu_hotplug.refcount);
-	mutex_unlock(&cpu_hotplug.lock);
-	return true;
-}
-EXPORT_SYMBOL_GPL(try_get_online_cpus);
-
 void put_online_cpus(void)
 {
 	int refcount;
@@ -397,7 +384,6 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen)
 	err = __stop_machine(take_cpu_down, &tcd_param, cpumask_of(cpu));
 	if (err) {
 		/* CPU didn't die: tell everyone.  Can't complain. */
-		smpboot_unpark_threads(cpu);
 		cpu_notify_nofail(CPU_DOWN_FAILED | mod, hcpu);
 		goto out_release;
 	}
@@ -410,8 +396,10 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen)
 	 *
 	 * Wait for the stop thread to go away.
 	 */
-	while (!idle_cpu(cpu))
+	while (!per_cpu(cpu_dead_idle, cpu))
 		cpu_relax();
+	smp_mb(); /* Read from cpu_dead_idle before __cpu_die(). */
+	per_cpu(cpu_dead_idle, cpu) = false;
 
 	/* This actually kills the CPU. */
 	__cpu_die(cpu);
@@ -448,6 +436,38 @@ out:
 }
 EXPORT_SYMBOL(cpu_down);
 #endif /*CONFIG_HOTPLUG_CPU*/
+
+/*
+ * Unpark per-CPU smpboot kthreads at CPU-online time.
+ */
+static int smpboot_thread_call(struct notifier_block *nfb,
+			       unsigned long action, void *hcpu)
+{
+	int cpu = (long)hcpu;
+
+	switch (action & ~CPU_TASKS_FROZEN) {
+
+	case CPU_DOWN_FAILED:
+	case CPU_ONLINE:
+		smpboot_unpark_threads(cpu);
+		break;
+
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block smpboot_thread_notifier = {
+	.notifier_call = smpboot_thread_call,
+	.priority = CPU_PRI_SMPBOOT,
+};
+
+void smpboot_thread_init(void)
+{
+	register_cpu_notifier(&smpboot_thread_notifier);
+}
 
 /* Requires cpu_add_remove_lock to be held */
 static int _cpu_up(unsigned int cpu, int tasks_frozen)
@@ -487,9 +507,6 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen)
 	if (ret != 0)
 		goto out_notify;
 	BUG_ON(!cpu_online(cpu));
-
-	/* Wake the per cpu threads */
-	smpboot_unpark_threads(cpu);
 
 	/* Now call notifier in preparation. */
 	cpu_notify(CPU_ONLINE | mod, hcpu);

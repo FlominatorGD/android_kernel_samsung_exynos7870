@@ -1564,12 +1564,9 @@ static void acpi_bus_init_power_state(struct acpi_device *device, int state)
 
 		if (buffer.length && package
 		    && package->type == ACPI_TYPE_PACKAGE
-		    && package->package.count) {
-			int err = acpi_extract_power_resources(package, 0,
-							       &ps->resources);
-			if (!err)
-				device->power.flags.power_resources = 1;
-		}
+		    && package->package.count)
+			acpi_extract_power_resources(package, 0, &ps->resources);
+
 		ACPI_FREE(buffer.pointer);
 	}
 
@@ -1578,15 +1575,9 @@ static void acpi_bus_init_power_state(struct acpi_device *device, int state)
 	if (acpi_has_method(device->handle, pathname))
 		ps->flags.explicit_set = 1;
 
-	/*
-	 * State is valid if there are means to put the device into it.
-	 * D3hot is only valid if _PR3 present.
-	 */
-	if (!list_empty(&ps->resources)
-	    || (ps->flags.explicit_set && state < ACPI_STATE_D3_HOT)) {
+	/* State is valid if there are means to put the device into it. */
+	if (!list_empty(&ps->resources) || ps->flags.explicit_set)
 		ps->flags.valid = 1;
-		ps->flags.os_accessible = 1;
-	}
 
 	ps->power = -1;		/* Unknown - driver assigned */
 	ps->latency = -1;	/* Unknown - driver assigned */
@@ -1623,20 +1614,25 @@ static void acpi_bus_get_power_flags(struct acpi_device *device)
 
 	INIT_LIST_HEAD(&device->power.states[ACPI_STATE_D3_COLD].resources);
 
-	/* Set defaults for D0 and D3 states (always valid) */
+	/* Set the defaults for D0 and D3hot (always supported). */
 	device->power.states[ACPI_STATE_D0].flags.valid = 1;
 	device->power.states[ACPI_STATE_D0].power = 100;
-	device->power.states[ACPI_STATE_D3_COLD].flags.valid = 1;
-	device->power.states[ACPI_STATE_D3_COLD].power = 0;
+	device->power.states[ACPI_STATE_D3_HOT].flags.valid = 1;
 
-	/* Set D3cold's explicit_set flag if _PS3 exists. */
-	if (device->power.states[ACPI_STATE_D3_HOT].flags.explicit_set)
-		device->power.states[ACPI_STATE_D3_COLD].flags.explicit_set = 1;
-
-	/* Presence of _PS3 or _PRx means we can put the device into D3 cold */
-	if (device->power.states[ACPI_STATE_D3_HOT].flags.explicit_set ||
-			device->power.flags.power_resources)
-		device->power.states[ACPI_STATE_D3_COLD].flags.os_accessible = 1;
+	/*
+	 * Use power resources only if the D0 list of them is populated, because
+	 * some platforms may provide _PR3 only to indicate D3cold support and
+	 * in those cases the power resources list returned by it may be bogus.
+	 */
+	if (!list_empty(&device->power.states[ACPI_STATE_D0].resources)) {
+		device->power.flags.power_resources = 1;
+		/*
+		 * D3cold is supported if the D3hot list of power resources is
+		 * not empty.
+		 */
+		if (!list_empty(&device->power.states[ACPI_STATE_D3_HOT].resources))
+			device->power.states[ACPI_STATE_D3_COLD].flags.valid = 1;
+	}
 
 	if (acpi_bus_init_power(device))
 		device->flags.power_manageable = 0;

@@ -99,12 +99,12 @@ static inline int arch_spin_value_unlocked(arch_spinlock_t lock)
 
 static inline int arch_spin_is_locked(arch_spinlock_t *lock)
 {
-	return !arch_spin_value_unlocked(ACCESS_ONCE(*lock));
+	return !arch_spin_value_unlocked(READ_ONCE(*lock));
 }
 
 static inline int arch_spin_is_contended(arch_spinlock_t *lock)
 {
-	arch_spinlock_t lockval = ACCESS_ONCE(*lock);
+	arch_spinlock_t lockval = READ_ONCE(*lock);
 	return (lockval.next - lockval.owner) > 1;
 }
 #define arch_spin_is_contended	arch_spin_is_contended
@@ -140,10 +140,11 @@ static inline int arch_write_trylock(arch_rwlock_t *rw)
 	unsigned int tmp;
 
 	asm volatile(
-	"	ldaxr	%w0, %1\n"
-	"	cbnz	%w0, 1f\n"
+	"1:	ldaxr	%w0, %1\n"
+	"	cbnz	%w0, 2f\n"
 	"	stxr	%w0, %w2, %1\n"
-	"1:\n"
+	"	cbnz	%w0, 1b\n"
+	"2:\n"
 	: "=&r" (tmp), "+Q" (rw->lock)
 	: "r" (0x80000000)
 	: "memory");
@@ -209,11 +210,12 @@ static inline int arch_read_trylock(arch_rwlock_t *rw)
 	unsigned int tmp, tmp2 = 1;
 
 	asm volatile(
-	"	ldaxr	%w0, %2\n"
+	"1:	ldaxr	%w0, %2\n"
 	"	add	%w0, %w0, #1\n"
-	"	tbnz	%w0, #31, 1f\n"
+	"	tbnz	%w0, #31, 2f\n"
 	"	stxr	%w1, %w0, %2\n"
-	"1:\n"
+	"	cbnz	%w1, 1b\n"
+	"2:\n"
 	: "=&r" (tmp), "+r" (tmp2), "+Q" (rw->lock)
 	:
 	: "memory");

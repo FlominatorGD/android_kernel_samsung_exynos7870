@@ -325,6 +325,7 @@ static void alc_fill_eapd_coef(struct hda_codec *codec)
 		break;
 	case 0x10ec0225:
 	case 0x10ec0233:
+	case 0x10ec0235:
 	case 0x10ec0255:
 	case 0x10ec0282:
 	case 0x10ec0283:
@@ -6281,7 +6282,7 @@ static const struct snd_hda_pin_quirk alc269_pin_fixup_tbl[] = {
 	SND_HDA_PIN_QUIRK(0x10ec0299, 0x1028, "Dell", ALC269_FIXUP_DELL4_MIC_NO_PRESENCE,
 		ALC225_STANDARD_PINS,
 		{0x12, 0xb7a60130},
-		{0x13, 0xb8a60140},
+		{0x13, 0xb8a61140},
 		{0x17, 0x90170110}),
 	{}
 };
@@ -6413,6 +6414,7 @@ static int patch_alc269(struct hda_codec *codec)
 	case 0x10ec0298:
 		spec->codec_variant = ALC269_TYPE_ALC298;
 		break;
+	case 0x10ec0235:
 	case 0x10ec0255:
 		spec->codec_variant = ALC269_TYPE_ALC255;
 		break;

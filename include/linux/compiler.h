@@ -283,7 +283,12 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 	({ union { typeof(x) __val; char __c[1]; } __u; __read_once_size(&(x), __u.__c, sizeof(x)); __u.__val; })
 
 #define WRITE_ONCE(x, val) \
-	({ typeof(x) __val = (val); __write_once_size(&(x), &__val, sizeof(__val)); __val; })
+({							\
+	union { typeof(x) __val; char __c[1]; } __u =	\
+		{ .__val = (__force typeof(x)) (val) }; \
+	__write_once_size(&(x), __u.__c, sizeof(x));	\
+	__u.__val;					\
+})
 
 #endif /* __KERNEL__ */
 
@@ -497,7 +502,7 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
  */
 #define lockless_dereference(p) \
 ({ \
-	typeof(p) _________p1 = ACCESS_ONCE(p); \
+	typeof(p) _________p1 = READ_ONCE(p); \
 	smp_read_barrier_depends(); /* Dependency order vs. p above. */ \
 	(_________p1); \
 })
