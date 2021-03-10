@@ -463,6 +463,10 @@ static int __btrfs_add_delayed_deletion_item(struct btrfs_delayed_node *node,
 static void finish_one_item(struct btrfs_delayed_root *delayed_root)
 {
 	int seq = atomic_inc_return(&delayed_root->items_seq);
+
+	/*
+	 * atomic_dec_return implies a barrier for waitqueue_active
+	 */
 	if ((atomic_dec_return(&delayed_root->items) <
 	    BTRFS_DELAYED_BACKGROUND || seq % BTRFS_DELAYED_BATCH == 0) &&
 	    waitqueue_active(&delayed_root->wait))
@@ -1759,27 +1763,31 @@ static void fill_stack_inode_item(struct btrfs_trans_handle *trans,
 	btrfs_set_stack_inode_flags(inode_item, BTRFS_I(inode)->flags);
 	btrfs_set_stack_inode_block_group(inode_item, 0);
 
-	btrfs_set_stack_timespec_sec(btrfs_inode_atime(inode_item),
+	btrfs_set_stack_timespec_sec(&inode_item->atime,
 				     inode->i_atime.tv_sec);
-	btrfs_set_stack_timespec_nsec(btrfs_inode_atime(inode_item),
+	btrfs_set_stack_timespec_nsec(&inode_item->atime,
 				      inode->i_atime.tv_nsec);
 
-	btrfs_set_stack_timespec_sec(btrfs_inode_mtime(inode_item),
+	btrfs_set_stack_timespec_sec(&inode_item->mtime,
 				     inode->i_mtime.tv_sec);
-	btrfs_set_stack_timespec_nsec(btrfs_inode_mtime(inode_item),
+	btrfs_set_stack_timespec_nsec(&inode_item->mtime,
 				      inode->i_mtime.tv_nsec);
 
-	btrfs_set_stack_timespec_sec(btrfs_inode_ctime(inode_item),
+	btrfs_set_stack_timespec_sec(&inode_item->ctime,
 				     inode->i_ctime.tv_sec);
-	btrfs_set_stack_timespec_nsec(btrfs_inode_ctime(inode_item),
+	btrfs_set_stack_timespec_nsec(&inode_item->ctime,
 				      inode->i_ctime.tv_nsec);
+
+	btrfs_set_stack_timespec_sec(&inode_item->otime,
+				     BTRFS_I(inode)->i_otime.tv_sec);
+	btrfs_set_stack_timespec_nsec(&inode_item->otime,
+				     BTRFS_I(inode)->i_otime.tv_nsec);
 }
 
 int btrfs_fill_inode(struct inode *inode, u32 *rdev)
 {
 	struct btrfs_delayed_node *delayed_node;
 	struct btrfs_inode_item *inode_item;
-	struct btrfs_timespec *tspec;
 
 	delayed_node = btrfs_get_delayed_node(inode);
 	if (!delayed_node)
@@ -1801,22 +1809,26 @@ int btrfs_fill_inode(struct inode *inode, u32 *rdev)
 	set_nlink(inode, btrfs_stack_inode_nlink(inode_item));
 	inode_set_bytes(inode, btrfs_stack_inode_nbytes(inode_item));
 	BTRFS_I(inode)->generation = btrfs_stack_inode_generation(inode_item);
+        BTRFS_I(inode)->last_trans = btrfs_stack_inode_transid(inode_item);
+
 	inode->i_version = btrfs_stack_inode_sequence(inode_item);
 	inode->i_rdev = 0;
 	*rdev = btrfs_stack_inode_rdev(inode_item);
 	BTRFS_I(inode)->flags = btrfs_stack_inode_flags(inode_item);
 
-	tspec = btrfs_inode_atime(inode_item);
-	inode->i_atime.tv_sec = btrfs_stack_timespec_sec(tspec);
-	inode->i_atime.tv_nsec = btrfs_stack_timespec_nsec(tspec);
+	inode->i_atime.tv_sec = btrfs_stack_timespec_sec(&inode_item->atime);
+	inode->i_atime.tv_nsec = btrfs_stack_timespec_nsec(&inode_item->atime);
 
-	tspec = btrfs_inode_mtime(inode_item);
-	inode->i_mtime.tv_sec = btrfs_stack_timespec_sec(tspec);
-	inode->i_mtime.tv_nsec = btrfs_stack_timespec_nsec(tspec);
+	inode->i_mtime.tv_sec = btrfs_stack_timespec_sec(&inode_item->mtime);
+	inode->i_mtime.tv_nsec = btrfs_stack_timespec_nsec(&inode_item->mtime);
 
-	tspec = btrfs_inode_ctime(inode_item);
-	inode->i_ctime.tv_sec = btrfs_stack_timespec_sec(tspec);
-	inode->i_ctime.tv_nsec = btrfs_stack_timespec_nsec(tspec);
+	inode->i_ctime.tv_sec = btrfs_stack_timespec_sec(&inode_item->ctime);
+	inode->i_ctime.tv_nsec = btrfs_stack_timespec_nsec(&inode_item->ctime);
+
+	BTRFS_I(inode)->i_otime.tv_sec =
+		btrfs_stack_timespec_sec(&inode_item->otime);
+	BTRFS_I(inode)->i_otime.tv_nsec =
+		btrfs_stack_timespec_nsec(&inode_item->otime);
 
 	inode->i_generation = BTRFS_I(inode)->generation;
 	BTRFS_I(inode)->index_cnt = (u64)-1;

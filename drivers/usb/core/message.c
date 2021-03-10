@@ -1419,8 +1419,6 @@ int usb_set_interface(struct usb_device *dev, int interface, int alternate)
 	 * new altsetting.
 	 */
 	if (manual) {
-		int i;
-
 		for (i = 0; i < alt->desc.bNumEndpoints; i++) {
 			epaddr = alt->endpoint[i].desc.bEndpointAddress;
 			pipe = __create_pipe(dev,
@@ -1949,11 +1947,6 @@ free_interfaces:
 				dev_name(&intf->dev), ret);
 			continue;
 		}
-#ifdef CONFIG_HOST_COMPLIANT_TEST
-		if (usb_get_intfdata(intf) == NULL)
-			dev_info(&intf->dev, "%s : match interface failed\n",
-					__func__);
-#endif
 		create_intf_ep_devs(intf);
 	}
 

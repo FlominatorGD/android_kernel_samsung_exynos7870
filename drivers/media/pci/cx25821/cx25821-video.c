@@ -1017,11 +1017,13 @@ void cx25821_video_unregister(struct cx25821_dev *dev, int chan_num)
 	cx_clear(PCI_INT_MSK, 1);
 
 	if (video_is_registered(&dev->channels[chan_num].vdev)) {
+		struct cx25821_riscmem *risc =
+			&dev->channels[chan_num].dma_vidq.stopper;
+
 		video_unregister_device(&dev->channels[chan_num].vdev);
 		v4l2_ctrl_handler_free(&dev->channels[chan_num].hdl);
 
-		btcx_riscmem_free(dev->pci,
-				&dev->channels[chan_num].dma_vidq.stopper);
+		pci_free_consistent(dev->pci, risc->size, risc->cpu, risc->dma);
 	}
 }
 
@@ -1035,7 +1037,7 @@ int cx25821_video_register(struct cx25821_dev *dev)
 
 	spin_lock_init(&dev->slock);
 
-	for (i = 0; i < MAX_VID_CHANNEL_NUM - 1; ++i) {
+	for (i = 0; i < MAX_VID_CAP_CHANNEL_NUM - 1; ++i) {
 		struct cx25821_channel *chan = &dev->channels[i];
 		struct video_device *vdev = &chan->vdev;
 		struct v4l2_ctrl_handler *hdl = &chan->hdl;

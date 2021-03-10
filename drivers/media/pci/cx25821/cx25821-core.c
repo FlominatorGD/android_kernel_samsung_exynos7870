@@ -967,11 +967,15 @@ void cx25821_dev_unregister(struct cx25821_dev *dev)
 
 	release_mem_region(dev->base_io_addr, pci_resource_len(dev->pci, 0));
 
-	for (i = 0; i < MAX_VID_CHANNEL_NUM - 1; i++) {
+	for (i = 0; i < MAX_VID_CAP_CHANNEL_NUM - 1; i++) {
 		if (i == SRAM_CH08) /* audio channel */
 			continue;
+		/*
+		 * TODO: enable when video output is properly
+		 * supported.
 		if (i == SRAM_CH09 || i == SRAM_CH10)
 			cx25821_free_mem_upstream(&dev->channels[i]);
+		 */
 		cx25821_video_unregister(dev, i);
 	}
 
@@ -979,6 +983,29 @@ void cx25821_dev_unregister(struct cx25821_dev *dev)
 	cx25821_iounmap(dev);
 }
 EXPORT_SYMBOL(cx25821_dev_unregister);
+
+int cx25821_riscmem_alloc(struct pci_dev *pci,
+		       struct cx25821_riscmem *risc,
+		       unsigned int size)
+{
+	__le32 *cpu;
+	dma_addr_t dma = 0;
+
+	if (risc->cpu && risc->size < size) {
+		pci_free_consistent(pci, risc->size, risc->cpu, risc->dma);
+		risc->cpu = NULL;
+	}
+	if (NULL == risc->cpu) {
+		cpu = pci_zalloc_consistent(pci, size, &dma);
+		if (NULL == cpu)
+			return -ENOMEM;
+		risc->cpu  = cpu;
+		risc->dma  = dma;
+		risc->size = size;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(cx25821_riscmem_alloc);
 
 static __le32 *cx25821_risc_field(__le32 * rp, struct scatterlist *sglist,
 				  unsigned int offset, u32 sync_line,
@@ -997,7 +1024,7 @@ static __le32 *cx25821_risc_field(__le32 * rp, struct scatterlist *sglist,
 	for (line = 0; line < lines; line++) {
 		while (offset && offset >= sg_dma_len(sg)) {
 			offset -= sg_dma_len(sg);
-			sg++;
+			sg = sg_next(sg);
 		}
 		if (bpl <= sg_dma_len(sg) - offset) {
 			/* fits into current chunk */
@@ -1015,14 +1042,14 @@ static __le32 *cx25821_risc_field(__le32 * rp, struct scatterlist *sglist,
 			*(rp++) = cpu_to_le32(0);	/* bits 63-32 */
 			todo -= (sg_dma_len(sg) - offset);
 			offset = 0;
-			sg++;
+			sg = sg_next(sg);
 			while (todo > sg_dma_len(sg)) {
 				*(rp++) = cpu_to_le32(RISC_WRITE |
 						sg_dma_len(sg));
 				*(rp++) = cpu_to_le32(sg_dma_address(sg));
 				*(rp++) = cpu_to_le32(0);	/* bits 63-32 */
 				todo -= sg_dma_len(sg);
-				sg++;
+				sg = sg_next(sg);
 			}
 			*(rp++) = cpu_to_le32(RISC_WRITE | RISC_EOL | todo);
 			*(rp++) = cpu_to_le32(sg_dma_address(sg));
@@ -1036,7 +1063,7 @@ static __le32 *cx25821_risc_field(__le32 * rp, struct scatterlist *sglist,
 	return rp;
 }
 
-int cx25821_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
+int cx25821_risc_buffer(struct pci_dev *pci, struct cx25821_riscmem *risc,
 			struct scatterlist *sglist, unsigned int top_offset,
 			unsigned int bottom_offset, unsigned int bpl,
 			unsigned int padding, unsigned int lines)
@@ -1060,7 +1087,7 @@ int cx25821_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
 	instructions = fields * (1 + ((bpl + padding) * lines) / PAGE_SIZE +
 			lines);
 	instructions += 2;
-	rc = btcx_riscmem_alloc(pci, risc, instructions * 12);
+	rc = cx25821_riscmem_alloc(pci, risc, instructions * 12);
 
 	if (rc < 0)
 		return rc;
@@ -1102,7 +1129,7 @@ static __le32 *cx25821_risc_field_audio(__le32 * rp, struct scatterlist *sglist,
 	for (line = 0; line < lines; line++) {
 		while (offset && offset >= sg_dma_len(sg)) {
 			offset -= sg_dma_len(sg);
-			sg++;
+			sg = sg_next(sg);
 		}
 
 		if (lpi && line > 0 && !(line % lpi))
@@ -1126,14 +1153,14 @@ static __le32 *cx25821_risc_field_audio(__le32 * rp, struct scatterlist *sglist,
 			*(rp++) = cpu_to_le32(0);	/* bits 63-32 */
 			todo -= (sg_dma_len(sg) - offset);
 			offset = 0;
-			sg++;
+			sg = sg_next(sg);
 			while (todo > sg_dma_len(sg)) {
 				*(rp++) = cpu_to_le32(RISC_WRITE |
 						sg_dma_len(sg));
 				*(rp++) = cpu_to_le32(sg_dma_address(sg));
 				*(rp++) = cpu_to_le32(0);	/* bits 63-32 */
 				todo -= sg_dma_len(sg);
-				sg++;
+				sg = sg_next(sg);
 			}
 			*(rp++) = cpu_to_le32(RISC_WRITE | RISC_EOL | todo);
 			*(rp++) = cpu_to_le32(sg_dma_address(sg));
@@ -1147,7 +1174,7 @@ static __le32 *cx25821_risc_field_audio(__le32 * rp, struct scatterlist *sglist,
 }
 
 int cx25821_risc_databuffer_audio(struct pci_dev *pci,
-				  struct btcx_riscmem *risc,
+				  struct cx25821_riscmem *risc,
 				  struct scatterlist *sglist,
 				  unsigned int bpl,
 				  unsigned int lines, unsigned int lpi)
@@ -1164,7 +1191,7 @@ int cx25821_risc_databuffer_audio(struct pci_dev *pci,
 	instructions = 1 + (bpl * lines) / PAGE_SIZE + lines;
 	instructions += 1;
 
-	rc = btcx_riscmem_alloc(pci, risc, instructions * 12);
+	rc = cx25821_riscmem_alloc(pci, risc, instructions * 12);
 	if (rc < 0)
 		return rc;
 
@@ -1180,13 +1207,13 @@ int cx25821_risc_databuffer_audio(struct pci_dev *pci,
 }
 EXPORT_SYMBOL(cx25821_risc_databuffer_audio);
 
-int cx25821_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc,
+int cx25821_risc_stopper(struct pci_dev *pci, struct cx25821_riscmem *risc,
 			 u32 reg, u32 mask, u32 value)
 {
 	__le32 *rp;
 	int rc;
 
-	rc = btcx_riscmem_alloc(pci, risc, 4 * 16);
+	rc = cx25821_riscmem_alloc(pci, risc, 4 * 16);
 
 	if (rc < 0)
 		return rc;
@@ -1212,7 +1239,8 @@ void cx25821_free_buffer(struct videobuf_queue *q, struct cx25821_buffer *buf)
 	videobuf_waiton(q, &buf->vb, 0, 0);
 	videobuf_dma_unmap(q->dev, dma);
 	videobuf_dma_free(dma);
-	btcx_riscmem_free(to_pci_dev(q->dev), &buf->risc);
+	pci_free_consistent(to_pci_dev(q->dev),
+			buf->risc.size, buf->risc.cpu, buf->risc.dma);
 	buf->vb.state = VIDEOBUF_NEEDS_INIT;
 }
 
