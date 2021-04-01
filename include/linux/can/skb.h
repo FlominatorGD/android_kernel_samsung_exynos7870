@@ -44,16 +44,15 @@ static inline void can_skb_reserve(struct sk_buff *skb)
 	skb_reserve(skb, sizeof(struct can_skb_priv));
 }
 
-static inline void can_skb_destructor(struct sk_buff *skb)
-{
-	sock_put(skb->sk);
-}
-
 static inline void can_skb_set_owner(struct sk_buff *skb, struct sock *sk)
 {
-	if (sk) {
-		sock_hold(sk);
-		skb->destructor = can_skb_destructor;
+	/* If the socket has already been closed by user space, the
+	 * refcount may already be 0 (and the socket will be freed
+	 * after the last TX skb has been freed). So only increase
+	 * socket refcount if the refcount is > 0.
+	 */
+	if (sk && atomic_inc_not_zero(&sk->sk_refcnt)) {
+		skb->destructor = sock_efree;
 		skb->sk = sk;
 	}
 }
