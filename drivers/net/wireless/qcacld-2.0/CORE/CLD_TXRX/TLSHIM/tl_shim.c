@@ -460,6 +460,91 @@ is_ccmp_pn_replay_attack(void *vos_ctx, struct ieee80211_frame *wh,
 }
 #endif
 
+/**
+ * tlshim_is_pkt_drop_candidate() - check if the mgmt frame should be droppped
+ * @wma_handle: wma handle
+ * @peer_addr: peer MAC address
+ * @subtype: Management frame subtype
+ *
+ * This function is used to decide if a particular management frame should be
+ * dropped to prevent DOS attack. Timestamp is used to decide the DOS attack.
+ *
+ * Return: true if the packet should be dropped and false oterwise
+ */
+static bool tlshim_is_pkt_drop_candidate(tp_wma_handle wma_handle,
+					 uint8_t *peer_addr, uint8_t subtype)
+{
+	struct ol_txrx_peer_t *peer;
+	struct ol_txrx_pdev_t *pdev_ctx;
+	uint8_t peer_id;
+	tANI_BOOLEAN should_drop = eANI_BOOLEAN_FALSE;
+
+	/*
+	 * Currently this function handles only Disassoc,
+	 * Deauth and Assoc req frames. Return false for all other frames.
+	 */
+	if (subtype != IEEE80211_FC0_SUBTYPE_DISASSOC &&
+	    subtype != IEEE80211_FC0_SUBTYPE_DEAUTH &&
+	    subtype != IEEE80211_FC0_SUBTYPE_ASSOC_REQ) {
+		should_drop = FALSE;
+		goto end;
+	}
+
+	pdev_ctx = vos_get_context(VOS_MODULE_ID_TXRX, wma_handle->vos_context);
+	if (!pdev_ctx) {
+		TLSHIM_LOGE(FL("Failed to get the context"));
+		should_drop = TRUE;
+		goto end;
+	}
+
+	peer = ol_txrx_find_peer_by_addr(pdev_ctx, peer_addr, &peer_id);
+	if (!peer) {
+		if (IEEE80211_FC0_SUBTYPE_ASSOC_REQ != subtype) {
+			TLSHIM_LOGE(FL("Received mgmt frame: %0x from unknow peer: %pM"),
+				subtype, peer_addr);
+			should_drop = TRUE;
+		}
+		goto end;
+	}
+
+	switch (subtype) {
+	case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+		if (peer->last_assoc_rcvd &&
+		    vos_system_time_after(peer->last_assoc_rcvd +
+					  TLSHIM_MGMT_FRAME_DETECT_DOS_TIMER,
+					  adf_os_gettimestamp())) {
+			TLSHIM_LOGD(FL("Dropping Assoc Req as it is received after %d ms of last frame. Allow it only after %d ms"),
+				    (int) (adf_os_gettimestamp() -
+				    peer->last_assoc_rcvd),
+				    TLSHIM_MGMT_FRAME_DETECT_DOS_TIMER);
+			should_drop = TRUE;
+			break;
+		}
+		peer->last_assoc_rcvd = adf_os_gettimestamp();
+		break;
+	case IEEE80211_FC0_SUBTYPE_DISASSOC:
+	case IEEE80211_FC0_SUBTYPE_DEAUTH:
+		if (peer->last_disassoc_deauth_rcvd &&
+		    vos_system_time_after(peer->last_disassoc_deauth_rcvd +
+					  TLSHIM_MGMT_FRAME_DETECT_DOS_TIMER,
+					  adf_os_gettimestamp())) {
+			TLSHIM_LOGD(FL("Dropping subtype %x frame as it is received after %d ms of last frame. Allow it only after %d ms"),
+				    subtype, (int) (adf_os_gettimestamp() -
+				    peer->last_disassoc_deauth_rcvd),
+				    TLSHIM_MGMT_FRAME_DETECT_DOS_TIMER);
+			should_drop = TRUE;
+			break;
+		}
+		peer->last_disassoc_deauth_rcvd = adf_os_gettimestamp();
+		break;
+	default:
+		break;
+	}
+
+end:
+	return should_drop;
+}
+
 #define RESERVE_BYTES   100
 static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 				       u_int32_t data_len, bool saved_beacon, u_int32_t vdev_id)
@@ -467,9 +552,7 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 	void *vos_ctx = vos_get_global_context(VOS_MODULE_ID_TL, NULL);
 	struct txrx_tl_shim_ctx *tl_shim = vos_get_context(VOS_MODULE_ID_TL,
 							   vos_ctx);
-#ifdef FEATURE_WLAN_D0WOW
 	tp_wma_handle wma_handle = vos_get_context(VOS_MODULE_ID_WDA, vos_ctx);
-#endif
 	WMI_MGMT_RX_EVENTID_param_tlvs *param_tlvs = NULL;
 	wmi_mgmt_rx_hdr *hdr = NULL;
 #ifdef WLAN_FEATURE_11W
@@ -509,6 +592,13 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Rx event is NULL");
 		return 0;
+	}
+
+	if (hdr->buf_len > param_tlvs->num_bufp) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
+		TLSHIM_LOGE("Invalid length of frame hdr->buf_len:%u, param_tlvs->num_bufp:%u",
+			hdr->buf_len, param_tlvs->num_bufp);
+		return -EINVAL;
 	}
 
 	if (hdr->buf_len < sizeof(struct ieee80211_frame)) {
@@ -800,6 +890,11 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 		}
 	}
 #endif /* WLAN_FEATURE_11W */
+	if (tlshim_is_pkt_drop_candidate(wma_handle, wh->i_addr2,
+					 mgt_subtype)) {
+		vos_pkt_return_packet(rx_pkt);
+		return -EINVAL;
+	}
 	return tl_shim->mgmt_rx(vos_ctx, rx_pkt);
 }
 

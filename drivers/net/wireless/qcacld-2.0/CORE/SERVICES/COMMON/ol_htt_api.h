@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014, 2016, 2018 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -170,7 +170,7 @@ htt_h2t_dbg_stats_get(
     u_int32_t stats_type_reset_mask,
     u_int8_t cfg_stats_type,
     u_int32_t cfg_val,
-    u_int64_t cookie);
+    u_int8_t cookie);
 
 /**
  * @brief Get the fields from HTT T2H stats upload message's stats info header
@@ -205,7 +205,7 @@ void
 htt_t2h_stats_print(u_int8_t *stats_data, int concise);
 
 #ifndef HTT_DEBUG_LEVEL
-#if defined(DEBUG)
+#if defined(WLAN_DEBUG)
 #define HTT_DEBUG_LEVEL 10
 #else
 #define HTT_DEBUG_LEVEL 0
