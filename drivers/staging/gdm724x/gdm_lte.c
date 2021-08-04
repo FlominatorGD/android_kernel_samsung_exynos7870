@@ -623,10 +623,12 @@ static void gdm_lte_netif_rx(struct net_device *dev, char *buf,
 						  * bytes (99,130,83,99 dec)
 						  */
 			} __packed;
-			void *addr = buf + sizeof(struct iphdr) +
-				sizeof(struct udphdr) +
-				offsetof(struct dhcp_packet, chaddr);
-			memcpy(nic->dest_mac_addr, addr, ETH_ALEN);
+			int offset = sizeof(struct iphdr) +
+				     sizeof(struct udphdr) +
+				     offsetof(struct dhcp_packet, chaddr);
+			if (offset + ETH_ALEN > len)
+				return;
+			ether_addr_copy(nic->dest_mac_addr, buf + offset);
 		}
 	}
 
@@ -639,7 +641,7 @@ static void gdm_lte_netif_rx(struct net_device *dev, char *buf,
 	}
 
 	/* Format the data so that it can be put to skb */
-	memcpy(mac_header_data, nic->dest_mac_addr, ETH_ALEN);
+	ether_addr_copy(mac_header_data, nic->dest_mac_addr);
 	memcpy(mac_header_data + ETH_ALEN, nic->src_mac_addr, ETH_ALEN);
 
 	vlan_eth.h_vlan_TCI = htons(nic->vlan_id);
@@ -688,6 +690,7 @@ static void gdm_lte_multi_sdu_pkt(struct phy_dev *phy_dev, char *buf, int len)
 	struct multi_sdu *multi_sdu = (struct multi_sdu *)buf;
 	struct sdu *sdu = NULL;
 	u8 *data = (u8 *)multi_sdu->data;
+	int copied;
 	u16 i = 0;
 	u16 num_packet;
 	u16 hci_len;
@@ -701,6 +704,12 @@ static void gdm_lte_multi_sdu_pkt(struct phy_dev *phy_dev, char *buf, int len)
 				multi_sdu->num_packet);
 
 	for (i = 0; i < num_packet; i++) {
+		copied = data - multi_sdu->data;
+		if (len < copied + sizeof(*sdu)) {
+			pr_err("rx prevent buffer overflow");
+			return;
+		}
+
 		sdu = (struct sdu *)data;
 
 		cmd_evt = gdm_dev16_to_cpu(phy_dev->
@@ -714,7 +723,8 @@ static void gdm_lte_multi_sdu_pkt(struct phy_dev *phy_dev, char *buf, int len)
 			pr_err("rx sdu wrong hci %04x\n", cmd_evt);
 			return;
 		}
-		if (hci_len < 12) {
+		if (hci_len < 12 ||
+		    len < copied + sizeof(*sdu) + (hci_len - 12)) {
 			pr_err("rx sdu invalid len %d\n", hci_len);
 			return;
 		}
@@ -842,9 +852,9 @@ static void form_mac_address(u8 *dev_addr, u8 *nic_src, u8 *nic_dest,
 {
 	/* Form the dev_addr */
 	if (!mac_address)
-		memcpy(dev_addr, gdm_lte_macaddr, ETH_ALEN);
+		ether_addr_copy(dev_addr, gdm_lte_macaddr);
 	else
-		memcpy(dev_addr, mac_address, ETH_ALEN);
+		ether_addr_copy(dev_addr, mac_address);
 
 	/* The last byte of the mac address
 	 * should be less than or equal to 0xFC
@@ -858,7 +868,7 @@ static void form_mac_address(u8 *dev_addr, u8 *nic_src, u8 *nic_dest,
 	memcpy(nic_src, dev_addr, 3);
 
 	/* Copy the nic_dest from dev_addr*/
-	memcpy(nic_dest, dev_addr, ETH_ALEN);
+	ether_addr_copy(nic_dest, dev_addr);
 }
 
 static void validate_mac_address(u8 *mac_address)
