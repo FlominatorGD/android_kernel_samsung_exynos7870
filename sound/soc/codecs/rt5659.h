@@ -180,9 +180,9 @@
 #define RT5659_IRQ_CTRL_1			0x00b6
 #define RT5659_IRQ_CTRL_2			0x00b7
 #define RT5659_IRQ_CTRL_3			0x00b8
-#define RT5659_IRQ_CTRL_4			0x00b9
-#define RT5659_IRQ_CTRL_5			0x00ba
-#define RT5659_IRQ_CTRL_6			0x00bb
+#define RT5659_IRQ_CTRL_4			0x00ba
+#define RT5659_IRQ_CTRL_5			0x00bb
+#define RT5659_IRQ_CTRL_6			0x00bc
 #define RT5659_INT_ST_1				0x00be
 #define RT5659_INT_ST_2				0x00bf
 #define RT5659_GPIO_CTRL_1			0x00c0
@@ -1277,7 +1277,7 @@
 #define RT5659_PLL1_PD_1			(0x0 << 3)
 #define RT5659_PLL1_PD_2			(0x1 << 3)
 
-#define RT5659_PLL_INP_MAX			50000000
+#define RT5659_PLL_INP_MAX			40000000
 #define RT5659_PLL_INP_MIN			256000
 /* PLL M/N/K Code Control 1 (0x0081) */
 #define RT5659_PLL_N_MAX			0x001ff
