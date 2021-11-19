@@ -1,0 +1,1 @@
+YYLTYPE yylloc;

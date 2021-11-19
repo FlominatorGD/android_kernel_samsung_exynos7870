@@ -39,8 +39,6 @@ LINECOMMENT	"//".*\n
 #include "srcpos.h"
 #include "dtc-parser.tab.h"
 
-YYLTYPE yylloc;
-
 /* CAUTION: this will stop working if we ever use yyless() or yyunput() */
 #define	YY_USER_ACTION \
 	{ \
@@ -247,4 +245,15 @@ static int pop_input_file(void)
 	yyin = current_srcfile->f;
 
 	return 1;
+}
+
+static void lexical_error(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	srcpos_verror(&yylloc, "Lexical error", fmt, ap);
+	va_end(ap);
+
+	treesource_error = true;
 }
