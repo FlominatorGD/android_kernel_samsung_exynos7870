@@ -75,7 +75,7 @@ static void tcp_yeah_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 	if (!tcp_is_cwnd_limited(sk))
 		return;
 
-	if (tp->snd_cwnd <= tp->snd_ssthresh)
+	if (tcp_in_slow_start(tp))
 		tcp_slow_start(tp, acked);
 
 	else if (!yeah->doing_reno_now) {
@@ -92,7 +92,7 @@ static void tcp_yeah_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 
 	} else {
 		/* Reno */
-		tcp_cong_avoid_ai(tp, tp->snd_cwnd);
+		tcp_cong_avoid_ai(tp, tp->snd_cwnd, 1);
 	}
 
 	/* The key players are v_vegas.beg_snd_una and v_beg_snd_nxt.

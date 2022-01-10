@@ -1532,7 +1532,6 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	spin_lock_init(&dev->se_tmr_lock);
 	spin_lock_init(&dev->qf_cmd_lock);
 	sema_init(&dev->caw_sem, 1);
-	atomic_set(&dev->dev_ordered_id, 0);
 	INIT_LIST_HEAD(&dev->t10_wwn.t10_vpd_list);
 	spin_lock_init(&dev->t10_wwn.t10_vpd_lock);
 	INIT_LIST_HEAD(&dev->t10_pr.registration_list);
@@ -1543,6 +1542,8 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	spin_lock_init(&dev->t10_alua.tg_pt_gps_lock);
 	INIT_LIST_HEAD(&dev->t10_alua.lba_map_list);
 	spin_lock_init(&dev->t10_alua.lba_map_lock);
+
+	INIT_WORK(&dev->delayed_cmd_work, target_do_delayed_work);
 
 	dev->t10_wwn.t10_dev = dev;
 	dev->t10_alua.t10_dev = dev;

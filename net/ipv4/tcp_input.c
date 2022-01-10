@@ -1846,14 +1846,12 @@ advance_sp:
 	for (j = 0; j < used_sacks; j++)
 		tp->recv_sack_cache[i++] = sp[j];
 
-	tcp_mark_lost_retrans(sk);
-
-	tcp_verify_left_out(tp);
-
 	if ((state.reord < tp->fackets_out) &&
 	    ((inet_csk(sk)->icsk_ca_state != TCP_CA_Loss) || tp->undo_marker))
 		tcp_update_reordering(sk, tp->fackets_out - state.reord, 0);
 
+	tcp_mark_lost_retrans(sk);
+	tcp_verify_left_out(tp);
 out:
 
 #if FASTRETRANS_DEBUG > 0
@@ -3571,10 +3569,6 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 				    sack_rtt_us);
 	acked -= tp->packets_out;
 
-	/* Advance cwnd if state allows */
-	if (tcp_may_raise_cwnd(sk, flag))
-		tcp_cong_avoid(sk, ack, acked);
-
 	if (tcp_ack_is_dubious(sk, flag)) {
 		is_dupack = !(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP));
 		tcp_fastretrans_alert(sk, acked, prior_unsacked,
@@ -3582,6 +3576,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	}
 	if (tp->tlp_high_seq)
 		tcp_process_tlp_ack(sk, ack, flag);
+
+	/* Advance cwnd if state allows */
+	if (tcp_may_raise_cwnd(sk, flag))
+		tcp_cong_avoid(sk, ack, acked);
 
 	if ((flag & FLAG_FORWARD_PROGRESS) || !(flag & FLAG_NOT_DUP)) {
 		struct dst_entry *dst = __sk_dst_get(sk);

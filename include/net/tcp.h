@@ -840,6 +840,8 @@ enum tcp_ca_ack_event_flags {
 /* Requires ECN/ECT set on all packets */
 #define TCP_CONG_NEEDS_ECN	0x2
 
+union tcp_cc_info;
+
 struct tcp_congestion_ops {
 	struct list_head	list;
 	unsigned long flags;
@@ -864,7 +866,8 @@ struct tcp_congestion_ops {
 	/* hook for packet ack accounting (optional) */
 	void (*pkts_acked)(struct sock *sk, u32 num_acked, s32 rtt_us);
 	/* get info for inet_diag (optional) */
-	void (*get_info)(struct sock *sk, u32 ext, struct sk_buff *skb);
+	size_t (*get_info)(struct sock *sk, u32 ext, int *attr,
+			   union tcp_cc_info *info);
 
 	char 		name[TCP_CA_NAME_MAX];
 	struct module 	*owner;
@@ -882,8 +885,8 @@ void tcp_get_available_congestion_control(char *buf, size_t len);
 void tcp_get_allowed_congestion_control(char *buf, size_t len);
 int tcp_set_allowed_congestion_control(char *allowed);
 int tcp_set_congestion_control(struct sock *sk, const char *name);
-void tcp_slow_start(struct tcp_sock *tp, u32 acked);
-void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w);
+u32 tcp_slow_start(struct tcp_sock *tp, u32 acked);
+void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked);
 
 u32 tcp_reno_ssthresh(struct sock *sk);
 void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked);
@@ -982,6 +985,11 @@ static inline unsigned int tcp_packets_in_flight(const struct tcp_sock *tp)
 
 #define TCP_INFINITE_SSTHRESH	0x7fffffff
 
+static inline bool tcp_in_slow_start(const struct tcp_sock *tp)
+{
+	return tp->snd_cwnd < tp->snd_ssthresh;
+}
+
 static inline bool tcp_in_initial_slowstart(const struct tcp_sock *tp)
 {
 	return tp->snd_ssthresh >= TCP_INFINITE_SSTHRESH;
@@ -1058,7 +1066,7 @@ static inline bool tcp_is_cwnd_limited(const struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 
 	/* If in slow start, ensure cwnd grows to twice what was ACKed. */
-	if (tp->snd_cwnd <= tp->snd_ssthresh)
+	if (tcp_in_slow_start(tp))
 		return tp->snd_cwnd < 2 * tp->max_packets_out;
 
 	return tp->is_cwnd_limited;
