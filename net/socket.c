@@ -591,12 +591,17 @@ const struct file_operations bad_sock_fops = {
  *	an inode not a file.
  */
 
-void sock_release(struct socket *sock)
+static void __sock_release(struct socket *sock, struct inode *inode)
 {
 	if (sock->ops) {
 		struct module *owner = sock->ops->owner;
 
+		if (inode)
+			mutex_lock(&inode->i_mutex);
 		sock->ops->release(sock);
+		sock->sk = NULL;
+		if (inode)
+			mutex_unlock(&inode->i_mutex);
 		sock->ops = NULL;
 		module_put(owner);
 	}
@@ -610,6 +615,11 @@ void sock_release(struct socket *sock)
 		return;
 	}
 	sock->file = NULL;
+}
+
+void sock_release(struct socket *sock)
+{
+	__sock_release(sock, NULL);
 }
 EXPORT_SYMBOL(sock_release);
 
@@ -1177,7 +1187,7 @@ static int sock_mmap(struct file *file, struct vm_area_struct *vma)
 
 static int sock_close(struct inode *inode, struct file *filp)
 {
-	sock_release(SOCKET_I(inode));
+	__sock_release(SOCKET_I(inode), inode);
 	return 0;
 }
 
@@ -2230,10 +2240,11 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 
 	if (MSG_CMSG_COMPAT & flags)
 		err = get_compat_msghdr(msg_sys, msg_compat);
-	else 
+	else
 		err = copy_msghdr_from_user(msg_sys, msg);
-	if (err < 0)
-			return err;
+	if (err)
+		return err;
+
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		err = -EMSGSIZE;
 		if (msg_sys->msg_iovlen > UIO_MAXIOV)

@@ -530,9 +530,9 @@ EXPORT_SYMBOL(__getnstimeofday64);
 
 /**
  * getnstimeofday64 - Returns the time of day in a timespec64.
- * @ts:		pointer to the timespec to be set
+ * @ts:		pointer to the timespec64 to be set
  *
- * Returns the time of day in a timespec (WARN if suspended).
+ * Returns the time of day in a timespec64 (WARN if suspended).
  */
 void getnstimeofday64(struct timespec64 *ts)
 {
@@ -634,7 +634,7 @@ EXPORT_SYMBOL_GPL(ktime_get_raw);
  *
  * The function calculates the monotonic clock from the realtime
  * clock and the wall_to_monotonic offset and stores the result
- * in normalized timespec format in the variable pointed to by @ts.
+ * in normalized timespec64 format in the variable pointed to by @ts.
  */
 void ktime_get_ts64(struct timespec64 *ts)
 {
@@ -762,19 +762,19 @@ void do_gettimeofday(struct timeval *tv)
 EXPORT_SYMBOL(do_gettimeofday);
 
 /**
- * do_settimeofday - Sets the time of day
- * @tv:		pointer to the timespec variable containing the new time
+ * do_settimeofday64 - Sets the time of day.
+ * @ts:     pointer to the timespec64 variable containing the new time
  *
  * Sets the time of day to the new time and update NTP and notify hrtimers
  */
-int do_settimeofday(const struct timespec *tv)
+int do_settimeofday64(const struct timespec64 *ts)
 {
 	struct timekeeper *tk = &tk_core.timekeeper;
-	struct timespec64 ts_delta, xt, tmp;
+	struct timespec64 ts_delta, xt;
 	unsigned long flags;
 	int ret = 0;
 
-	if (!timespec_valid_strict(tv))
+	if (!timespec64_valid_strict(ts))
 		return -EINVAL;
 
 	raw_spin_lock_irqsave(&timekeeper_lock, flags);
@@ -783,8 +783,7 @@ int do_settimeofday(const struct timespec *tv)
 	timekeeping_forward_now(tk);
 
 	xt = tk_xtime(tk);
-	ts_delta.tv_sec = tv->tv_sec - xt.tv_sec;
-	ts_delta.tv_nsec = tv->tv_nsec - xt.tv_nsec;
+	ts_delta = timespec64_sub(*ts, xt);
 
 	if (timespec64_compare(&tk->wall_to_monotonic, &ts_delta) > 0) {
 		ret = -EINVAL;
@@ -793,8 +792,7 @@ int do_settimeofday(const struct timespec *tv)
 
 	tk_set_wall_to_mono(tk, timespec64_sub(tk->wall_to_monotonic, ts_delta));
 
-	tmp = timespec_to_timespec64(*tv);
-	tk_set_xtime(tk, &tmp);
+	tk_set_xtime(tk, ts);
 out:
 	timekeeping_update(tk, TK_CLEAR_NTP | TK_MIRROR | TK_CLOCK_WAS_SET);
 
@@ -806,7 +804,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL(do_settimeofday);
+EXPORT_SYMBOL(do_settimeofday64);
 
 /**
  * timekeeping_inject_offset - Adds or subtracts from the current time.
@@ -1108,7 +1106,7 @@ void __init timekeeping_init(void)
 	raw_spin_unlock_irqrestore(&timekeeper_lock, flags);
 }
 
-/* time in seconds when suspend began */
+/* time in seconds when suspend began for persistent clock */
 static struct timespec64 timekeeping_suspend_time;
 
 /**
@@ -1134,8 +1132,8 @@ static void __timekeeping_inject_sleeptime(struct timekeeper *tk,
 }
 
 /**
- * timekeeping_inject_sleeptime - Adds suspend interval to timeekeeping values
- * @delta: pointer to a timespec delta value
+ * timekeeping_inject_sleeptime64 - Adds suspend interval to timeekeeping values
+ * @delta: pointer to a timespec64 delta value
  *
  * This hook is for architectures that cannot support read_persistent_clock
  * because their RTC/persistent clock is only accessible when irqs are enabled.
@@ -1143,10 +1141,9 @@ static void __timekeeping_inject_sleeptime(struct timekeeper *tk,
  * This function should only be called by rtc_resume(), and allows
  * a suspend offset to be injected into the timekeeping values.
  */
-void timekeeping_inject_sleeptime(struct timespec *delta)
+void timekeeping_inject_sleeptime64(struct timespec64 *delta)
 {
 	struct timekeeper *tk = &tk_core.timekeeper;
-	struct timespec64 tmp;
 	unsigned long flags;
 
 	/*
@@ -1161,8 +1158,7 @@ void timekeeping_inject_sleeptime(struct timespec *delta)
 
 	timekeeping_forward_now(tk);
 
-	tmp = timespec_to_timespec64(*delta);
-	__timekeeping_inject_sleeptime(tk, &tmp);
+	__timekeeping_inject_sleeptime(tk, delta);
 
 	timekeeping_update(tk, TK_CLEAR_NTP | TK_MIRROR | TK_CLOCK_WAS_SET);
 
@@ -1287,24 +1283,26 @@ static int timekeeping_suspend(void)
 	timekeeping_forward_now(tk);
 	timekeeping_suspended = 1;
 
-	/*
-	 * To avoid drift caused by repeated suspend/resumes,
-	 * which each can add ~1 second drift error,
-	 * try to compensate so the difference in system time
-	 * and persistent_clock time stays close to constant.
-	 */
-	delta = timespec64_sub(tk_xtime(tk), timekeeping_suspend_time);
-	delta_delta = timespec64_sub(delta, old_delta);
-	if (abs(delta_delta.tv_sec)  >= 2) {
+	if (has_persistent_clock()) {
 		/*
-		 * if delta_delta is too large, assume time correction
-		 * has occured and set old_delta to the current delta.
+		 * To avoid drift caused by repeated suspend/resumes,
+		 * which each can add ~1 second drift error,
+		 * try to compensate so the difference in system time
+		 * and persistent_clock time stays close to constant.
 		 */
-		old_delta = delta;
-	} else {
-		/* Otherwise try to adjust old_system to compensate */
-		timekeeping_suspend_time =
-			timespec64_add(timekeeping_suspend_time, delta_delta);
+		delta = timespec64_sub(tk_xtime(tk), timekeeping_suspend_time);
+		delta_delta = timespec64_sub(delta, old_delta);
+		if (abs(delta_delta.tv_sec) >= 2) {
+			/*
+			 * if delta_delta is too large, assume time correction
+			 * has occurred and set old_delta to the current delta.
+			 */
+			old_delta = delta;
+		} else {
+			/* Otherwise try to adjust old_system to compensate */
+			timekeeping_suspend_time =
+				timespec64_add(timekeeping_suspend_time, delta_delta);
+		}
 	}
 
 	timekeeping_update(tk, TK_MIRROR);
