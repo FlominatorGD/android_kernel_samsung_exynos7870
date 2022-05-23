@@ -600,22 +600,18 @@ static void start_io_acct(struct dm_io *io)
 				    bio_sectors(bio), false, 0, &io->stats_aux);
 }
 
-static void end_io_acct(struct dm_io *io)
+static void end_io_acct(struct mapped_device *md, struct bio *bio,
+			unsigned long start_time, struct dm_stats_aux *stats_aux)
 {
-	struct mapped_device *md = io->md;
-	struct bio *bio = io->bio;
-	unsigned long duration = jiffies - io->start_time;
-	int pending, cpu;
+	unsigned long duration = jiffies - start_time;
+	int pending;
 	int rw = bio_data_dir(bio);
 
-	cpu = part_stat_lock();
-	part_round_stats(cpu, &dm_disk(md)->part0);
-	part_stat_add(cpu, &dm_disk(md)->part0, ticks[rw], duration);
-	part_stat_unlock();
+	generic_end_io_acct(rw, &dm_disk(md)->part0, start_time);
 
 	if (unlikely(dm_stats_used(&md->stats)))
 		dm_stats_account_io(&md->stats, bio->bi_rw, bio->bi_iter.bi_sector,
-				    bio_sectors(bio), true, duration, &io->stats_aux);
+				    bio_sectors(bio), true, duration, stats_aux);
 
 	/*
 	 * After this is decremented the bio must not be touched if it is
@@ -846,6 +842,8 @@ static void dec_pending(struct dm_io *io, int error)
 	int io_error;
 	struct bio *bio;
 	struct mapped_device *md = io->md;
+	unsigned long start_time = 0;
+	struct dm_stats_aux stats_aux;
 
 	/* Push-back supersedes any I/O errors */
 	if (unlikely(error)) {
@@ -871,8 +869,10 @@ static void dec_pending(struct dm_io *io, int error)
 
 		io_error = io->error;
 		bio = io->bio;
-		end_io_acct(io);
+		start_time = io->start_time;
+		stats_aux = io->stats_aux;
 		free_io(md, io);
+		end_io_acct(md, bio, start_time, &stats_aux);
 
 		if (io_error == DM_ENDIO_REQUEUE)
 			return;
@@ -1706,16 +1706,12 @@ static void _dm_request(struct request_queue *q, struct bio *bio)
 {
 	int rw = bio_data_dir(bio);
 	struct mapped_device *md = q->queuedata;
-	int cpu;
 	int srcu_idx;
 	struct dm_table *map;
 
 	map = dm_get_live_table(md, &srcu_idx);
 
-	cpu = part_stat_lock();
-	part_stat_inc(cpu, &dm_disk(md)->part0, ios[rw]);
-	part_stat_add(cpu, &dm_disk(md)->part0, sectors[rw], bio_sectors(bio));
-	part_stat_unlock();
+	generic_start_io_acct(rw, bio_sectors(bio), &dm_disk(md)->part0);
 
 	/* if we're suspended, we have to queue this io for later */
 	if (unlikely(test_bit(DMF_BLOCK_IO_FOR_SUSPEND, &md->flags))) {
@@ -2675,6 +2671,8 @@ static int dm_wait_for_completion(struct mapped_device *md, int interruptible)
 	set_current_state(TASK_RUNNING);
 
 	remove_wait_queue(&md->wait, &wait);
+
+	smp_rmb(); /* paired with atomic_dec_return in end_io_acct */
 
 	return r;
 }
