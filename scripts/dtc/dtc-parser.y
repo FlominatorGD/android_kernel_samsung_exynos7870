@@ -24,12 +24,12 @@
 #include "dtc.h"
 #include "srcpos.h"
 
-YYLTYPE yylloc;
-
 extern int yylex(void);
 extern void print_error(char const *fmt, ...);
-extern void yyerror(char const *s);
-
+extern void yyerror(char const *s)
+{
+	ERROR(&yylloc, "%s", s);
+}
 extern struct boot_info *the_boot_info;
 extern int treesource_error;
 
