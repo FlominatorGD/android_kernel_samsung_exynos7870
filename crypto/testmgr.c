@@ -39,14 +39,6 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 	return 0;
 }
 
-#ifdef CONFIG_CRYPTO_FIPS
-bool in_fips_err()
-{
-	return false;
-}
-EXPORT_SYMBOL_GPL(in_fips_err);
-#endif
-
 #else
 
 #include "testmgr.h"
@@ -73,12 +65,6 @@ EXPORT_SYMBOL_GPL(in_fips_err);
 */
 #define ENCRYPT 1
 #define DECRYPT 0
-
-#ifdef CONFIG_CRYPTO_FIPS
-#define FIPS_ERR 1
-#define FIPS_NO_ERR 0
-static int IN_FIPS_ERROR = FIPS_NO_ERR;
-#endif
 
 struct tcrypt_result {
 	struct completion completion;
@@ -147,26 +133,7 @@ struct alg_test_desc {
 
 static unsigned int IDX[8] = { IDX1, IDX2, IDX3, IDX4, IDX5, IDX6, IDX7, IDX8 };
 
-#ifdef CONFIG_CRYPTO_FIPS
-bool in_fips_err()
-{
-	return (IN_FIPS_ERROR == FIPS_ERR);
-}
-EXPORT_SYMBOL_GPL(in_fips_err);
-
-void set_in_fips_err()
-{
-	IN_FIPS_ERROR = FIPS_ERR;
-}
-EXPORT_SYMBOL_GPL(set_in_fips_err);
-#endif
-
-
-#if FIPS_FUNC_TEST == 4
-void hexdump(unsigned char *buf, unsigned int len)
-#else
 static void hexdump(unsigned char *buf, unsigned int len)
-#endif
 {
 	print_hex_dump(KERN_CONT, "", DUMP_PREFIX_OFFSET,
 			16, 1,
@@ -1858,12 +1825,6 @@ static int alg_test_drbg(const struct alg_test_desc *desc, const char *driver,
 static int alg_test_null(const struct alg_test_desc *desc,
 			     const char *driver, u32 type, u32 mask)
 {
-#ifdef CONFIG_CRYPTO_FIPS
-        if (desc && desc->fips_allowed) {
-                if (unlikely(in_fips_err()))
-                        return -1;
-        }
-#endif
 	return 0;
 }
 
@@ -2341,6 +2302,21 @@ static const struct alg_test_desc alg_test_descs[] = {
 					.vecs = aes_ccm_dec_tv_template,
 					.count = AES_CCM_DEC_TEST_VECTORS
 				}
+			}
+		}
+	}, {
+		.alg = "chacha20",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = chacha20_enc_tv_template,
+					.count = CHACHA20_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = chacha20_enc_tv_template,
+					.count = CHACHA20_ENC_TEST_VECTORS
+				},
 			}
 		}
 	}, {
@@ -3323,6 +3299,15 @@ static const struct alg_test_desc alg_test_descs[] = {
 			}
 		}
 	}, {
+		.alg = "poly1305",
+		.test = alg_test_hash,
+		.suite = {
+			.hash = {
+				.vecs = poly1305_tv_template,
+				.count = POLY1305_TEST_VECTORS
+			}
+		}
+	}, {
 		.alg = "rfc3686(ctr(aes))",
 		.test = alg_test_skcipher,
 		.fips_allowed = 1,
@@ -3381,6 +3366,36 @@ static const struct alg_test_desc alg_test_descs[] = {
 				.dec = {
 					.vecs = aes_gcm_rfc4543_dec_tv_template,
 					.count = AES_GCM_4543_DEC_TEST_VECTORS
+				},
+			}
+		}
+	}, {
+		.alg = "rfc7539(chacha20,poly1305)",
+		.test = alg_test_aead,
+		.suite = {
+			.aead = {
+				.enc = {
+					.vecs = rfc7539_enc_tv_template,
+					.count = RFC7539_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = rfc7539_dec_tv_template,
+					.count = RFC7539_DEC_TEST_VECTORS
+				},
+			}
+		}
+	}, {
+		.alg = "rfc7539esp(chacha20,poly1305)",
+		.test = alg_test_aead,
+		.suite = {
+			.aead = {
+				.enc = {
+					.vecs = rfc7539esp_enc_tv_template,
+					.count = RFC7539ESP_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = rfc7539esp_dec_tv_template,
+					.count = RFC7539ESP_DEC_TEST_VECTORS
 				},
 			}
 		}
@@ -3722,7 +3737,7 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 {
 	int i;
 	int j;
-	int rc = 0;
+	int rc;
 
 	alg_test_descs_check_order();
 
@@ -3745,27 +3760,11 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 		goto test_done;
 	}
 
-	// Test skipped for QCrypto QCOM stuff	
-#ifdef CONFIG_CRYPTO_FIPS	
-	if(strncmp(driver,"qcrypto",strlen("qcrypto")) == 0){
-		goto notest;
-	}
-	else if(strncmp(driver,"qcom",strlen("qcom")) == 0){		
-		goto notest;
-	}
-#endif
-
-	i = alg_find_test(alg);	
-	j = alg_find_test(driver);	
+	i = alg_find_test(alg);
+	j = alg_find_test(driver);
 	if (i < 0 && j < 0)
 		goto notest;
 
-#if FIPS_FUNC_TEST == 3
-	// change@wtl.rsengott - FIPS mode self test Functional Test
-	if (fips_enabled)
-		printk(KERN_INFO "FIPS: %s: %s alg self test START in fips mode!\n",
-			driver, alg);
-#endif
 	if (fips_enabled && ((i >= 0 && !alg_test_descs[i].fips_allowed) ||
 			     (j >= 0 && !alg_test_descs[j].fips_allowed)))
 		goto non_fips_alg;
@@ -3779,44 +3778,21 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 					     type, mask);
 
 test_done:
-	if (fips_enabled && rc) {
-		printk(KERN_INFO
-			"FIPS: %s: %s alg self test failed\n",
-			driver, alg);
-#ifdef CONFIG_CRYPTO_FIPS
-		IN_FIPS_ERROR = FIPS_ERR;
-#else
+	if (fips_enabled && rc)
 		panic("%s: %s alg self test failed in fips mode!\n", driver, alg);
-#endif
-		return rc;
-	}
 
 	if (fips_enabled && !rc)
-		printk(KERN_INFO "FIPS: self-tests for %s (%s) passed\n", driver, alg);
+		pr_info(KERN_INFO "alg: self-tests for %s (%s) passed\n",
+			driver, alg);
 
 	return rc;
-	
 
 notest:
-	printk(KERN_INFO "FIPS: No test for %s (%s)\n", alg, driver);	
+	printk(KERN_INFO "alg: No test for %s (%s)\n", alg, driver);
 	return 0;
 non_fips_alg:
-	printk(KERN_INFO
-		"FIPS: self-tests for non-FIPS %s (%s) passed\n",
-		driver, alg);
-	return rc;
+	return -EINVAL;
 }
-
-int __init testmgr_crypto_proc_init(void)
-{
-#ifdef CONFIG_CRYPTO_FIPS
-	crypto_init_proc(&IN_FIPS_ERROR);
-#else
-	crypto_init_proc();
-#endif
-	return 0;
-}
-EXPORT_SYMBOL_GPL(testmgr_crypto_proc_init);
 
 #endif /* CONFIG_CRYPTO_MANAGER_DISABLE_TESTS */
 

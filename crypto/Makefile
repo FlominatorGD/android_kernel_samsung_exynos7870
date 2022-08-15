@@ -2,10 +2,6 @@
 # Cryptographic API
 #
 
-#Keep this on the top
-obj-$(CONFIG_CRYPTO_FIPS) += first_file.o
-obj-$(CONFIG_CRYPTO_FIPS) += fips_integrity.o
-
 obj-$(CONFIG_CRYPTO) += crypto.o
 crypto-y := api.o cipher.o compress.o memneq.o
 
@@ -63,6 +59,7 @@ obj-$(CONFIG_CRYPTO_XTS) += xts.o
 obj-$(CONFIG_CRYPTO_CTR) += ctr.o
 obj-$(CONFIG_CRYPTO_GCM) += gcm.o
 obj-$(CONFIG_CRYPTO_CCM) += ccm.o
+obj-$(CONFIG_CRYPTO_CHACHA20POLY1305) += chacha20poly1305.o
 obj-$(CONFIG_CRYPTO_PCRYPT) += pcrypt.o
 obj-$(CONFIG_CRYPTO_CRYPTD) += cryptd.o
 obj-$(CONFIG_CRYPTO_MCRYPTD) += mcryptd.o
@@ -85,6 +82,8 @@ obj-$(CONFIG_CRYPTO_KHAZAD) += khazad.o
 obj-$(CONFIG_CRYPTO_ANUBIS) += anubis.o
 obj-$(CONFIG_CRYPTO_SEED) += seed.o
 obj-$(CONFIG_CRYPTO_SALSA20) += salsa20_generic.o
+obj-$(CONFIG_CRYPTO_CHACHA20) += chacha20_generic.o
+obj-$(CONFIG_CRYPTO_POLY1305) += poly1305_generic.o
 obj-$(CONFIG_CRYPTO_DEFLATE) += deflate.o
 obj-$(CONFIG_CRYPTO_ZLIB) += zlib.o
 obj-$(CONFIG_CRYPTO_MICHAEL_MIC) += michael_mic.o
@@ -115,6 +114,3 @@ obj-$(CONFIG_ASYNC_CORE) += async_tx/
 obj-$(CONFIG_ASYMMETRIC_KEY_TYPE) += asymmetric_keys/
 obj-$(CONFIG_CRYPTO_HASH_INFO) += hash_info.o
 obj-$(CONFIG_CRYPTO_ABLK_HELPER) += ablk_helper.o
-
-#Keep this at the bottom
-obj-$(CONFIG_CRYPTO_FIPS) += last_file.o

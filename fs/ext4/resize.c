@@ -45,10 +45,33 @@ void ext4_kvfree_array_rcu(void *to_free)
 
 int ext4_resize_begin(struct super_block *sb)
 {
+	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	int ret = 0;
 
 	if (!capable(CAP_SYS_RESOURCE))
 		return -EPERM;
+
+	/*
+	 * If the reserved GDT blocks is non-zero, the resize_inode feature
+	 * should always be set.
+	 */
+	if (EXT4_SB(sb)->s_es->s_reserved_gdt_blocks &&
+	    !EXT4_HAS_COMPAT_FEATURE(sb, EXT4_FEATURE_COMPAT_RESIZE_INODE)) {
+		ext4_error(sb, "resize_inode disabled but reserved GDT blocks non-zero");
+		return -EFSCORRUPTED;
+	}
+
+	/*
+	 * If we are not using the primary superblock/GDT copy don't resize,
+         * because the user tools have no way of handling this.  Probably a
+         * bad time to do it anyways.
+         */
+	if (EXT4_B2C(sbi, sbi->s_sbh->b_blocknr) !=
+	    le32_to_cpu(EXT4_SB(sb)->s_es->s_first_data_block)) {
+		ext4_warning(sb, "won't resize using backup superblock at %llu",
+			(unsigned long long)EXT4_SB(sb)->s_sbh->b_blocknr);
+		return -EPERM;
+	}
 
 	/*
 	 * We are not allowed to do online-resizing on a filesystem mounted
@@ -782,18 +805,6 @@ static int add_new_gdb(handle_t *handle, struct inode *inode,
 		printk(KERN_DEBUG
 		       "EXT4-fs: ext4_add_new_gdb: adding group block %lu\n",
 		       gdb_num);
-
-	/*
-	 * If we are not using the primary superblock/GDT copy don't resize,
-         * because the user tools have no way of handling this.  Probably a
-         * bad time to do it anyways.
-         */
-	if (EXT4_SB(sb)->s_sbh->b_blocknr !=
-	    le32_to_cpu(EXT4_SB(sb)->s_es->s_first_data_block)) {
-		ext4_warning(sb, "won't resize using backup superblock at %llu",
-			(unsigned long long)EXT4_SB(sb)->s_sbh->b_blocknr);
-		return -EPERM;
-	}
 
 	gdb_bh = sb_bread(sb, gdblock);
 	if (!gdb_bh)

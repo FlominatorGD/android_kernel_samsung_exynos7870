@@ -488,7 +488,7 @@ struct crypto_alg *crypto_lookup_aead(const char *name, u32 type, u32 mask)
 		return alg;
 
 	if (alg->cra_type == &crypto_aead_type) {
-		if ((alg->cra_flags ^ type ^ ~mask) & CRYPTO_ALG_TESTED) {
+		if (~alg->cra_flags & (type ^ ~mask) & CRYPTO_ALG_TESTED) {
 			crypto_mod_put(alg);
 			alg = ERR_PTR(-ENOENT);
 		}
@@ -527,12 +527,6 @@ struct crypto_aead *crypto_alloc_aead(const char *alg_name, u32 type, u32 mask)
 	struct crypto_tfm *tfm;
 	int err;
 
-#ifdef CONFIG_CRYPTO_FIPS
-        if (unlikely(in_fips_err())) {
-                printk(KERN_ERR "FIPS : aead.c:crypto_alloc_aead FIPS in Error!!!\n");
-                return ERR_PTR(-EACCES);
-        }
-#endif
 	type &= ~(CRYPTO_ALG_TYPE_MASK | CRYPTO_ALG_GENIV);
 	type |= CRYPTO_ALG_TYPE_AEAD;
 	mask &= ~(CRYPTO_ALG_TYPE_MASK | CRYPTO_ALG_GENIV);

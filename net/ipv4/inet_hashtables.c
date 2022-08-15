@@ -23,6 +23,7 @@
 #include <net/inet_hashtables.h>
 #include <net/secure_seq.h>
 #include <net/ip.h>
+#include <net/tcp.h>
 
 static unsigned int inet_ehashfn(struct net *net, const __be32 laddr,
 				 const __u16 lport, const __be32 faddr,
@@ -390,7 +391,7 @@ not_unique:
 	return -EADDRNOTAVAIL;
 }
 
-static inline u32 inet_sk_port_offset(const struct sock *sk)
+static inline u64 inet_sk_port_offset(const struct sock *sk)
 {
 	const struct inet_sock *inet = inet_sk(sk);
 	return secure_ipv4_port_ephemeral(inet->inet_rcv_saddr,
@@ -476,8 +477,21 @@ void inet_unhash(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(inet_unhash);
 
+/* RFC 6056 3.3.4.  Algorithm 4: Double-Hash Port Selection Algorithm
+ * Note that we use 32bit integers (vs RFC 'short integers')
+ * because 2^16 is not a multiple of num_ephemeral and this
+ * property might be used by clever attacker.
+ * RFC claims using TABLE_LENGTH=10 buckets gives an improvement, though
+ * attacks were since demonstrated, thus we use 65536 instead to really
+ * give more isolation and privacy, at the expense of 256kB of kernel
+ * memory.
+ */
+#define INET_TABLE_PERTURB_SHIFT 16
+#define INET_TABLE_PERTURB_SIZE (1 << INET_TABLE_PERTURB_SHIFT)
+static u32 *table_perturb;
+
 int __inet_hash_connect(struct inet_timewait_death_row *death_row,
-		struct sock *sk, u32 port_offset,
+		struct sock *sk, u64 port_offset,
 		int (*check_established)(struct inet_timewait_death_row *,
 			struct sock *, __u16, struct inet_timewait_sock **),
 		int (*hash)(struct sock *sk, struct inet_timewait_sock *twp))
@@ -492,9 +506,15 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 
 	if (!snum) {
 		int i, remaining, low, high, port;
-		static u32 hint;
-		u32 offset = hint + port_offset;
+		u32 index;
+		u32 offset;
 		struct inet_timewait_sock *tw = NULL;
+
+		net_get_random_once(table_perturb,
+				    INET_TABLE_PERTURB_SIZE * sizeof(*table_perturb));
+		index = port_offset & (INET_TABLE_PERTURB_SIZE - 1);
+
+		offset = READ_ONCE(table_perturb[index]) + (port_offset >> 32);
 
 		inet_get_local_port_range(net, &low, &high);
 		remaining = (high - low) + 1;
@@ -544,7 +564,13 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		return -EADDRNOTAVAIL;
 
 ok:
-		hint += i;
+		/* Here we want to add a little bit of randomness to the next source
+		 * port that will be chosen. We use a max() with a random here so that
+		 * on low contention the randomness is maximal and on high contention
+		 * it may be inexistent.
+		 */
+		i = max_t(int, i, (prandom_u32() & 7) * 2);
+		WRITE_ONCE(table_perturb[index], READ_ONCE(table_perturb[index]) + i);
 
 		/* Head lock still held and bh's disabled */
 		inet_bind_hash(sk, tb, port);
@@ -605,6 +631,15 @@ void inet_hashinfo_init(struct inet_hashinfo *h)
 		spin_lock_init(&h->listening_hash[i].lock);
 		INIT_HLIST_NULLS_HEAD(&h->listening_hash[i].head,
 				      i + LISTENING_NULLS_BASE);
-		}
+	}
+
+	if (h != &tcp_hashinfo)
+		return;
+
+	/* this one is used for source ports of outgoing connections */
+	table_perturb = kmalloc_array(INET_TABLE_PERTURB_SIZE,
+				      sizeof(*table_perturb), GFP_KERNEL);
+	if (!table_perturb)
+		panic("TCP: failed to alloc table_perturb");
 }
 EXPORT_SYMBOL_GPL(inet_hashinfo_init);
