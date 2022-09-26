@@ -219,7 +219,10 @@ void tty_buffer_flush(struct tty_struct *tty)
 	atomic_inc(&buf->priority);
 
 	mutex_lock(&buf->lock);
-	while ((next = buf->head->next) != NULL) {
+	/* paired w/ release in __tty_buffer_request_room; ensures there are
+	 * no pending memory accesses to the freed buffer
+	 */
+	while ((next = smp_load_acquire(&buf->head->next)) != NULL) {
 		tty_buffer_free(port, buf->head);
 		buf->head = next;
 	}
@@ -260,13 +263,15 @@ static int __tty_buffer_request_room(struct tty_port *port, size_t size,
 		if ((n = tty_buffer_alloc(port, size)) != NULL) {
 			n->flags = flags;
 			buf->tail = n;
-			b->commit = b->used;
-			/* paired w/ barrier in flush_to_ldisc(); ensures the
+			/* paired w/ acquire in flush_to_ldisc(); ensures
+			 * flush_to_ldisc() sees buffer data.
+			 */
+			smp_store_release(&b->commit, b->used);
+			/* paired w/ acquire in flush_to_ldisc(); ensures the
 			 * latest commit value can be read before the head is
 			 * advanced to the next buffer
 			 */
-			smp_wmb();
-			b->next = n;
+			smp_store_release(&b->next, n);
 		} else if (change)
 			size = 0;
 		else
@@ -378,24 +383,6 @@ int __tty_insert_flip_char(struct tty_port *port, unsigned char ch, char flag)
 EXPORT_SYMBOL(__tty_insert_flip_char);
 
 /**
- *	tty_schedule_flip	-	push characters to ldisc
- *	@port: tty port to push from
- *
- *	Takes any pending buffers and transfers their ownership to the
- *	ldisc side of the queue. It then schedules those characters for
- *	processing by the line discipline.
- */
-
-void tty_schedule_flip(struct tty_port *port)
-{
-	struct tty_bufhead *buf = &port->buf;
-
-	buf->tail->commit = buf->tail->used;
-	schedule_work(&buf->work);
-}
-EXPORT_SYMBOL(tty_schedule_flip);
-
-/**
  *	tty_prepare_flip_string		-	make room for characters
  *	@port: tty port
  *	@chars: return pointer for character write area
@@ -466,7 +453,7 @@ static void flush_to_ldisc(struct work_struct *work)
 	struct tty_struct *tty;
 	struct tty_ldisc *disc;
 
-	tty = port->itty;
+	tty = READ_ONCE(port->itty);
 	if (tty == NULL)
 		return;
 
@@ -485,13 +472,15 @@ static void flush_to_ldisc(struct work_struct *work)
 		if (atomic_read(&buf->priority))
 			break;
 
-		next = head->next;
-		/* paired w/ barrier in __tty_buffer_request_room();
+		/* paired w/ release in __tty_buffer_request_room();
 		 * ensures commit value read is not stale if the head
 		 * is advancing to the next buffer
 		 */
-		smp_rmb();
-		count = head->commit - head->read;
+		next = smp_load_acquire(&head->next);
+		/* paired w/ release in __tty_buffer_request_room() or in
+		 * tty_buffer_flush(); ensures we see the committed buffer data
+		 */
+		count = smp_load_acquire(&head->commit) - head->read;
 		if (!count) {
 			if (next == NULL)
 				break;
@@ -512,6 +501,15 @@ static void flush_to_ldisc(struct work_struct *work)
 	mutex_unlock(&buf->lock);
 
 	tty_ldisc_deref(disc);
+}
+
+static inline void tty_flip_buffer_commit(struct tty_buffer *tail)
+{
+	/*
+	 * Paired w/ acquire in flush_to_ldisc(); ensures flush_to_ldisc() sees
+	 * buffer data.
+	 */
+	smp_store_release(&tail->commit, tail->used);
 }
 
 /**
@@ -540,9 +538,43 @@ void tty_flush_to_ldisc(struct tty_struct *tty)
 
 void tty_flip_buffer_push(struct tty_port *port)
 {
-	tty_schedule_flip(port);
+	struct tty_bufhead *buf = &port->buf;
+
+	tty_flip_buffer_commit(buf->tail);
+	queue_work(system_unbound_wq, &buf->work);
 }
 EXPORT_SYMBOL(tty_flip_buffer_push);
+
+/**
+ * tty_insert_flip_string_and_push_buffer - add characters to the tty buffer and
+ *	push
+ * @port: tty port
+ * @chars: characters
+ * @size: size
+ *
+ * The function combines tty_insert_flip_string() and tty_flip_buffer_push()
+ * with the exception of properly holding the @port->lock.
+ *
+ * To be used only internally (by pty currently).
+ *
+ * Returns: the number added.
+ */
+int tty_insert_flip_string_and_push_buffer(struct tty_port *port,
+		const unsigned char *chars, size_t size)
+{
+	struct tty_bufhead *buf = &port->buf;
+	unsigned long flags;
+
+	spin_lock_irqsave(&port->lock, flags);
+	size = tty_insert_flip_string(port, chars, size);
+	if (size)
+		tty_flip_buffer_commit(buf->tail);
+	spin_unlock_irqrestore(&port->lock, flags);
+
+	queue_work(system_unbound_wq, &buf->work);
+
+	return size;
+}
 
 /**
  *	tty_buffer_init		-	prepare a tty buffer structure
