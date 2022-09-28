@@ -220,6 +220,25 @@ static int multi_cpu_stop(void *data)
 	return err;
 }
 
+struct irq_cpu_stop_queue_work_info {
+	int cpu1;
+	int cpu2;
+	struct cpu_stop_work *work1;
+	struct cpu_stop_work *work2;
+};
+
+/*
+ * This function is always run with irqs and preemption disabled.
+ * This guarantees that both work1 and work2 get queued, before
+ * our local migrate thread gets the chance to preempt us.
+ */
+static void irq_cpu_stop_queue_work(void *arg)
+{
+	struct irq_cpu_stop_queue_work_info *info = arg;
+	cpu_stop_queue_work(info->cpu1, info->work1);
+	cpu_stop_queue_work(info->cpu2, info->work2);
+}
+
 /**
  * stop_two_cpus - stops two cpus
  * @cpu1: the cpu to stop
@@ -235,10 +254,8 @@ int stop_two_cpus(unsigned int cpu1, unsigned int cpu2, cpu_stop_fn_t fn, void *
 {
 	struct cpu_stop_done done;
 	struct cpu_stop_work work1, work2;
-	struct multi_stop_data msdata;
-
-	preempt_disable();
-	msdata = (struct multi_stop_data){
+	struct irq_cpu_stop_queue_work_info call_args;
+	struct multi_stop_data msdata = {
 		.fn = fn,
 		.data = arg,
 		.num_threads = 2,
@@ -251,31 +268,30 @@ int stop_two_cpus(unsigned int cpu1, unsigned int cpu2, cpu_stop_fn_t fn, void *
 		.done = &done
 	};
 
+	call_args = (struct irq_cpu_stop_queue_work_info){
+		.cpu1 = cpu1,
+		.cpu2 = cpu2,
+		.work1 = &work1,
+		.work2 = &work2,
+	};
+
 	cpu_stop_init_done(&done, 2);
 	set_state(&msdata, MULTI_STOP_PREPARE);
 
+	lg_local_lock(&stop_cpus_lock);
+
 	/*
-	 * If we observe both CPUs active we know _cpu_down() cannot yet have
-	 * queued its stop_machine works and therefore ours will get executed
-	 * first. Or its not either one of our CPUs that's getting unplugged,
-	 * in which case we don't care.
-	 *
-	 * This relies on the stopper workqueues to be FIFO.
+	 * Queuing needs to be done by the lowest numbered CPU, to ensure
+	 * that works are always queued in the same order on every CPU.
+	 * This prevents deadlocks.
 	 */
-	if (!cpu_active(cpu1) || !cpu_active(cpu2)) {
-		preempt_enable();
-		return -ENOENT;
-	}
+	smp_call_function_single(min(cpu1, cpu2),
+				 &irq_cpu_stop_queue_work,
+				 &call_args, 1);
 
-	lg_double_lock(&stop_cpus_lock, cpu1, cpu2);
-	cpu_stop_queue_work(cpu1, &work1);
-	cpu_stop_queue_work(cpu2, &work2);
-	lg_double_unlock(&stop_cpus_lock, cpu1, cpu2);
-
-	preempt_enable();
+	lg_local_unlock(&stop_cpus_lock);
 
 	wait_for_completion(&done.completion);
-
 	return done.executed ? done.ret : -ENOENT;
 }
 

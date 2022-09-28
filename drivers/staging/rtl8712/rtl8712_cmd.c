@@ -125,34 +125,6 @@ static void r871x_internal_cmd_hdl(struct _adapter *padapter, u8 *pbuf)
 	kfree(pdrvcmd->pbuf);
 }
 
-static u8 read_macreg_hdl(struct _adapter *padapter, u8 *pbuf)
-{
-	void (*pcmd_callback)(struct _adapter *dev, struct cmd_obj	*pcmd);
-	struct cmd_obj *pcmd  = (struct cmd_obj *)pbuf;
-
-	/*  invoke cmd->callback function */
-	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
-		r8712_free_cmd_obj(pcmd);
-	else
-		pcmd_callback(padapter, pcmd);
-	return H2C_SUCCESS;
-}
-
-static u8 write_macreg_hdl(struct _adapter *padapter, u8 *pbuf)
-{
-	void (*pcmd_callback)(struct _adapter *dev, struct cmd_obj	*pcmd);
-	struct cmd_obj *pcmd  = (struct cmd_obj *)pbuf;
-
-	/*  invoke cmd->callback function */
-	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
-		r8712_free_cmd_obj(pcmd);
-	else
-		pcmd_callback(padapter, pcmd);
-	return H2C_SUCCESS;
-}
-
 static u8 read_bbreg_hdl(struct _adapter *padapter, u8 *pbuf)
 {
 	u32 val;
@@ -164,7 +136,7 @@ static u8 read_bbreg_hdl(struct _adapter *padapter, u8 *pbuf)
 	if (pcmd->rsp && pcmd->rspsz > 0)
 		memcpy(pcmd->rsp, (u8 *)&val, pcmd->rspsz);
 	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
+	if (!pcmd_callback)
 		r8712_free_cmd_obj(pcmd);
 	else
 		pcmd_callback(padapter, pcmd);
@@ -179,7 +151,7 @@ static u8 write_bbreg_hdl(struct _adapter *padapter, u8 *pbuf)
 
 	pwritebbparm = (struct writeBB_parm *)pcmd->parmbuf;
 	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
+	if (!pcmd_callback)
 		r8712_free_cmd_obj(pcmd);
 	else
 		pcmd_callback(padapter, pcmd);
@@ -197,7 +169,7 @@ static u8 read_rfreg_hdl(struct _adapter *padapter, u8 *pbuf)
 	if (pcmd->rsp && pcmd->rspsz > 0)
 		memcpy(pcmd->rsp, (u8 *)&val, pcmd->rspsz);
 	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
+	if (!pcmd_callback)
 		r8712_free_cmd_obj(pcmd);
 	else
 		pcmd_callback(padapter, pcmd);
@@ -212,7 +184,7 @@ static u8 write_rfreg_hdl(struct _adapter *padapter, u8 *pbuf)
 
 	pwriterfparm = (struct writeRF_parm *)pcmd->parmbuf;
 	pcmd_callback = cmd_callback[pcmd->cmdcode].callback;
-	if (pcmd_callback == NULL)
+	if (!pcmd_callback)
 		r8712_free_cmd_obj(pcmd);
 	else
 		pcmd_callback(padapter, pcmd);
@@ -234,19 +206,11 @@ static struct cmd_obj *cmd_hdl_filter(struct _adapter *padapter,
 {
 	struct cmd_obj *pcmd_r;
 
-	if (pcmd == NULL)
+	if (!pcmd)
 		return pcmd;
 	pcmd_r = NULL;
 
 	switch (pcmd->cmdcode) {
-	case GEN_CMD_CODE(_Read_MACREG):
-		read_macreg_hdl(padapter, (u8 *)pcmd);
-		pcmd_r = pcmd;
-		break;
-	case GEN_CMD_CODE(_Write_MACREG):
-		write_macreg_hdl(padapter, (u8 *)pcmd);
-		pcmd_r = pcmd;
-		break;
 	case GEN_CMD_CODE(_Read_BBREG):
 		read_bbreg_hdl(padapter, (u8 *)pcmd);
 		break;
@@ -423,7 +387,7 @@ _next:
 	/* free all cmd_obj resources */
 	do {
 		pcmd = r8712_dequeue_cmd(&(pcmdpriv->cmd_queue));
-		if (pcmd == NULL)
+		if (!pcmd)
 			break;
 		r8712_free_cmd_obj(pcmd);
 	} while (1);
@@ -438,7 +402,7 @@ void r8712_event_handle(struct _adapter *padapter, uint *peventbuf)
 	void (*event_callback)(struct _adapter *dev, u8 *pbuf);
 	struct	evt_priv *pevt_priv = &(padapter->evtpriv);
 
-	if (peventbuf == NULL)
+	if (!peventbuf)
 		goto _abort_event_;
 	evt_sz = (u16)(le32_to_cpu(*peventbuf) & 0xffff);
 	evt_seq = (u8)((le32_to_cpu(*peventbuf) >> 24) & 0x7f);
