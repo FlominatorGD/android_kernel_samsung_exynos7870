@@ -368,6 +368,7 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	struct inode *inode;
 	struct nilfs_inode_info *ii;
 	struct nilfs_root *root;
+	struct buffer_head *bh;
 	int err = -ENOMEM;
 	ino_t ino;
 
@@ -383,10 +384,26 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	ii->i_state = 1 << NILFS_I_NEW;
 	ii->i_root = root;
 
-	err = nilfs_ifile_create_inode(root->ifile, &ino, &ii->i_bh);
+	err = nilfs_ifile_create_inode(root->ifile, &ino, &bh);
 	if (unlikely(err))
 		goto failed_ifile_create_inode;
 	/* reference count of i_bh inherits from nilfs_mdt_read_block() */
+
+	if (unlikely(ino < NILFS_USER_INO)) {
+		printk(KERN_WARNING
+		       "NILFS warning: inode bitmap is inconsistent "
+                       "for reserved inodes\n");
+		do {
+			brelse(bh);
+			err = nilfs_ifile_create_inode(root->ifile, &ino, &bh);
+			if (unlikely(err))
+				goto failed_ifile_create_inode;
+		} while (ino < NILFS_USER_INO);
+
+		printk(KERN_INFO
+		       "NILFS: repaired inode bitmap for reserved inodes\n");
+	}
+	ii->i_bh = bh;
 
 	atomic64_inc(&root->inodes_count);
 	inode_init_owner(inode, dir, mode);
@@ -477,6 +494,8 @@ int nilfs_read_inode_common(struct inode *inode,
 	inode->i_atime.tv_nsec = le32_to_cpu(raw_inode->i_mtime_nsec);
 	inode->i_ctime.tv_nsec = le32_to_cpu(raw_inode->i_ctime_nsec);
 	inode->i_mtime.tv_nsec = le32_to_cpu(raw_inode->i_mtime_nsec);
+	if (nilfs_is_metadata_file_inode(inode) && !S_ISREG(inode->i_mode))
+		return -EIO; /* this inode is for metadata and corrupted */
 	if (inode->i_nlink == 0)
 		return -ESTALE; /* this inode is deleted */
 
@@ -777,7 +796,6 @@ void nilfs_truncate(struct inode *inode)
 static void nilfs_clear_inode(struct inode *inode)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
-	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
 
 	/*
 	 * Free resources allocated in nilfs_read_inode(), here.
@@ -786,8 +804,8 @@ static void nilfs_clear_inode(struct inode *inode)
 	brelse(ii->i_bh);
 	ii->i_bh = NULL;
 
-	if (mdi && mdi->mi_palloc_cache)
-		nilfs_palloc_destroy_cache(inode);
+	if (nilfs_is_metadata_file_inode(inode))
+		nilfs_mdt_clear(inode);
 
 	if (test_bit(NILFS_I_BMAP, &ii->i_state))
 		nilfs_bmap_clear(ii->i_bmap);

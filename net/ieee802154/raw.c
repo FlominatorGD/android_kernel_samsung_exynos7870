@@ -63,8 +63,9 @@ static int raw_bind(struct sock *sk, struct sockaddr *_uaddr, int len)
 	int err = 0;
 	struct net_device *dev = NULL;
 
-	if (len < sizeof(*uaddr))
-		return -EINVAL;
+	err = ieee802154_sockaddr_check_size(uaddr, len);
+	if (err < 0)
+		return err;
 
 	uaddr = (struct sockaddr_ieee802154 *)_uaddr;
 	if (uaddr->family != AF_IEEE802154)
@@ -139,6 +140,10 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk,
 	if (size > mtu) {
 		pr_debug("size = %Zu, mtu = %u\n", size, mtu);
 		err = -EINVAL;
+		goto out_dev;
+	}
+	if (!size) {
+		err = 0;
 		goto out_dev;
 	}
 

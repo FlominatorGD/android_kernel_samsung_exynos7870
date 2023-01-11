@@ -272,6 +272,9 @@ static const struct file_operations codec_reg_fops = {
 
 static void soc_init_component_debugfs(struct snd_soc_component *component)
 {
+	if (!component->card->debugfs_card_root)
+		return;
+
 	if (component->debugfs_prefix) {
 		char *name;
 
@@ -423,6 +426,9 @@ static const struct file_operations platform_list_fops = {
 
 static void soc_init_card_debugfs(struct snd_soc_card *card)
 {
+	if (!snd_soc_debugfs_root)
+		return;
+
 	card->debugfs_card_root = debugfs_create_dir(card->name,
 						     snd_soc_debugfs_root);
 	if (!card->debugfs_card_root) {
@@ -442,6 +448,34 @@ static void soc_init_card_debugfs(struct snd_soc_card *card)
 static void soc_cleanup_card_debugfs(struct snd_soc_card *card)
 {
 	debugfs_remove_recursive(card->debugfs_card_root);
+}
+
+
+static void snd_soc_debugfs_init(void)
+{
+	snd_soc_debugfs_root = debugfs_create_dir("asoc", NULL);
+	if (IS_ERR(snd_soc_debugfs_root) || !snd_soc_debugfs_root) {
+		pr_warn("ASoC: Failed to create debugfs directory\n");
+		snd_soc_debugfs_root = NULL;
+		return;
+	}
+
+	if (!debugfs_create_file("codecs", 0444, snd_soc_debugfs_root, NULL,
+				 &codec_list_fops))
+		pr_warn("ASoC: Failed to create CODEC list debugfs file\n");
+
+	if (!debugfs_create_file("dais", 0444, snd_soc_debugfs_root, NULL,
+				 &dai_list_fops))
+		pr_warn("ASoC: Failed to create DAI list debugfs file\n");
+
+	if (!debugfs_create_file("platforms", 0444, snd_soc_debugfs_root, NULL,
+				 &platform_list_fops))
+		pr_warn("ASoC: Failed to create platform list debugfs file\n");
+}
+
+static void snd_soc_debugfs_exit(void)
+{
+	debugfs_remove_recursive(snd_soc_debugfs_root);
 }
 
 #else
@@ -465,6 +499,15 @@ static inline void soc_init_card_debugfs(struct snd_soc_card *card)
 static inline void soc_cleanup_card_debugfs(struct snd_soc_card *card)
 {
 }
+
+static inline void snd_soc_debugfs_init(void)
+{
+}
+
+static inline void snd_soc_debugfs_exit(void)
+{
+}
+
 #endif
 
 struct snd_pcm_substream *snd_soc_get_dai_substream(struct snd_soc_card *card,
@@ -1376,15 +1419,8 @@ static int soc_probe_link_dais(struct snd_soc_card *card, int num, int order)
 
 #ifdef CONFIG_DEBUG_FS
 	/* add DPCM sysfs entries */
-	if (dai_link->dynamic) {
-		ret = soc_dpcm_debugfs_add(rtd);
-		if (ret < 0) {
-			dev_err(rtd->dev,
-				"ASoC: failed to add dpcm sysfs entries: %d\n",
-				ret);
-			return ret;
-		}
-	}
+	if (dai_link->dynamic)
+		soc_dpcm_debugfs_add(rtd);
 #endif
 
 	ret = device_create_file(rtd->dev, &dev_attr_pmdown_time);
@@ -4859,38 +4895,32 @@ EXPORT_SYMBOL_GPL(snd_soc_of_get_dai_name);
 
 static int __init snd_soc_init(void)
 {
-#ifdef CONFIG_DEBUG_FS
-	snd_soc_debugfs_root = debugfs_create_dir("asoc", NULL);
-	if (IS_ERR(snd_soc_debugfs_root) || !snd_soc_debugfs_root) {
-		pr_warn("ASoC: Failed to create debugfs directory\n");
-		snd_soc_debugfs_root = NULL;
-	}
+	int ret;
 
-	if (!debugfs_create_file("codecs", 0444, snd_soc_debugfs_root, NULL,
-				 &codec_list_fops))
-		pr_warn("ASoC: Failed to create CODEC list debugfs file\n");
+	snd_soc_debugfs_init();
+	ret = snd_soc_util_init();
+	if (ret)
+		goto err_util_init;
 
-	if (!debugfs_create_file("dais", 0444, snd_soc_debugfs_root, NULL,
-				 &dai_list_fops))
-		pr_warn("ASoC: Failed to create DAI list debugfs file\n");
+	ret = platform_driver_register(&soc_driver);
+	if (ret)
+		goto err_register;
+	return 0;
 
-	if (!debugfs_create_file("platforms", 0444, snd_soc_debugfs_root, NULL,
-				 &platform_list_fops))
-		pr_warn("ASoC: Failed to create platform list debugfs file\n");
-#endif
-
-	snd_soc_util_init();
-
-	return platform_driver_register(&soc_driver);
+err_register:
+	snd_soc_util_exit();
+err_util_init:
+	snd_soc_debugfs_exit();
+	return ret;
 }
 module_init(snd_soc_init);
 
 static void __exit snd_soc_exit(void)
 {
 	snd_soc_util_exit();
+	snd_soc_debugfs_exit();
 
 #ifdef CONFIG_DEBUG_FS
-	debugfs_remove_recursive(snd_soc_debugfs_root);
 #endif
 	platform_driver_unregister(&soc_driver);
 }

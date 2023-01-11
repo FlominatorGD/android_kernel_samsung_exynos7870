@@ -803,6 +803,9 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 				musb_writew(epio, MUSB_RXCSR, csr);
 			}
 
+			fifo_count = min_t(unsigned int,
+					request->length - request->actual,
+					(unsigned int)fifo_count);
 			musb_read_fifo(musb_ep->hw_ep, fifo_count, (u8 *)
 					(request->buf + request->actual));
 			request->actual += fifo_count;
@@ -1684,7 +1687,8 @@ static int musb_gadget_pullup(struct usb_gadget *gadget, int is_on)
 
 static int musb_gadget_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
-static int musb_gadget_stop(struct usb_gadget *g);
+static int musb_gadget_stop(struct usb_gadget *g,
+		struct usb_gadget_driver *driver);
 
 static const struct usb_gadget_ops musb_gadget_operations = {
 	.get_frame		= musb_gadget_get_frame,
@@ -1924,7 +1928,8 @@ static void stop_activity(struct musb *musb, struct usb_gadget_driver *driver)
  *
  * @param driver the gadget driver to unregister
  */
-static int musb_gadget_stop(struct usb_gadget *g)
+static int musb_gadget_stop(struct usb_gadget *g,
+		struct usb_gadget_driver *driver)
 {
 	struct musb	*musb = gadget_to_musb(g);
 	unsigned long	flags;
