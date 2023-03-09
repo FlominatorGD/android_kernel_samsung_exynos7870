@@ -2427,9 +2427,9 @@ void __noreturn die_if_kernel(char *str, struct pt_regs *regs)
 		}
 		user_instruction_dump ((unsigned int __user *) regs->tpc);
 	}
-	if (regs->tstate & TSTATE_PRIV)
-		do_exit(SIGKILL);
-	do_exit(SIGSEGV);
+	if (panic_on_oops)
+		panic("Fatal exception");
+	make_task_dead((regs->tstate & TSTATE_PRIV)? SIGKILL : SIGSEGV);
 }
 EXPORT_SYMBOL(die_if_kernel);
 

@@ -1070,6 +1070,7 @@ static int set_supply(struct regulator_dev *rdev,
 
 	rdev->supply = create_regulator(supply_rdev, &rdev->dev, "SUPPLY");
 	if (rdev->supply == NULL) {
+		module_put(supply_rdev->owner);
 		err = -ENOMEM;
 		return err;
 	}
@@ -1290,8 +1291,11 @@ static struct regulator_dev *regulator_dev_lookup(struct device *dev,
 		if (node) {
 			list_for_each_entry(r, &regulator_list, list)
 				if (r->dev.parent &&
-					node == r->dev.of_node)
+					node == r->dev.of_node) {
+					of_node_put(node);
 					return r;
+				}
+			of_node_put(node);
 			*ret = -EPROBE_DEFER;
 			return NULL;
 		} else {

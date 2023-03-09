@@ -947,6 +947,7 @@ static int igb_request_msix(struct igb_adapter *adapter)
 {
 	unsigned int num_q_vectors = adapter->num_q_vectors;
 	struct net_device *netdev = adapter->netdev;
+	struct e1000_hw *hw = &adapter->hw;
 	int i, err = 0, vector = 0, free_vector = 0;
 
 	err = request_irq(adapter->msix_entries[vector].vector,
@@ -965,7 +966,7 @@ static int igb_request_msix(struct igb_adapter *adapter)
 
 		vector++;
 
-		q_vector->itr_register = adapter->io_addr + E1000_EITR(vector);
+		q_vector->itr_register = hw->hw_addr + E1000_EITR(vector);
 
 		if (q_vector->rx.ring && q_vector->tx.ring)
 			sprintf(q_vector->name, "%s-TxRx-%u", netdev->name,
@@ -1216,8 +1217,12 @@ static int igb_alloc_q_vector(struct igb_adapter *adapter,
 	if (!q_vector) {
 		q_vector = kzalloc(size, GFP_KERNEL);
 	} else if (size > ksize(q_vector)) {
-		kfree_rcu(q_vector, rcu);
-		q_vector = kzalloc(size, GFP_KERNEL);
+		struct igb_q_vector *new_q_vector;
+
+		new_q_vector = kzalloc(size, GFP_KERNEL);
+		if (new_q_vector)
+			kfree_rcu(q_vector, rcu);
+		q_vector = new_q_vector;
 	} else {
 		memset(q_vector, 0, size);
 	}
@@ -1236,7 +1241,7 @@ static int igb_alloc_q_vector(struct igb_adapter *adapter,
 	q_vector->tx.work_limit = adapter->tx_work_limit;
 
 	/* initialize ITR configuration */
-	q_vector->itr_register = adapter->io_addr + E1000_EITR(0);
+	q_vector->itr_register = adapter->hw.hw_addr + E1000_EITR(0);
 	q_vector->itr_val = IGB_START_ITR;
 
 	/* initialize pointer to rings */
@@ -3309,7 +3314,7 @@ void igb_configure_tx_ring(struct igb_adapter *adapter,
 	     tdba & 0x00000000ffffffffULL);
 	wr32(E1000_TDBAH(reg_idx), tdba >> 32);
 
-	ring->tail = adapter->io_addr + E1000_TDT(reg_idx);
+	ring->tail = hw->hw_addr + E1000_TDT(reg_idx);
 	wr32(E1000_TDH(reg_idx), 0);
 	writel(0, ring->tail);
 
@@ -3668,7 +3673,7 @@ void igb_configure_rx_ring(struct igb_adapter *adapter,
 	     ring->count * sizeof(union e1000_adv_rx_desc));
 
 	/* initialize head and tail */
-	ring->tail = adapter->io_addr + E1000_RDT(reg_idx);
+	ring->tail = hw->hw_addr + E1000_RDT(reg_idx);
 	wr32(E1000_RDH(reg_idx), 0);
 	writel(0, ring->tail);
 
@@ -5027,6 +5032,7 @@ netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 	struct igb_tx_buffer *first;
 	int tso;
 	u32 tx_flags = 0;
+	unsigned short f;
 	u16 count = TXD_USE_COUNT(skb_headlen(skb));
 	__be16 protocol = vlan_get_protocol(skb);
 	u8 hdr_len = 0;
@@ -5037,14 +5043,8 @@ netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 	 *       + 1 desc for context descriptor,
 	 * otherwise try next time
 	 */
-	if (NETDEV_FRAG_PAGE_MAX_SIZE > IGB_MAX_DATA_PER_TXD) {
-		unsigned short f;
-
-		for (f = 0; f < skb_shinfo(skb)->nr_frags; f++)
-			count += TXD_USE_COUNT(skb_shinfo(skb)->frags[f].size);
-	} else {
-		count += skb_shinfo(skb)->nr_frags;
-	}
+	for (f = 0; f < skb_shinfo(skb)->nr_frags; f++)
+		count += TXD_USE_COUNT(skb_shinfo(skb)->frags[f].size);
 
 	if (igb_maybe_stop_tx(tx_ring, count + 3)) {
 		/* this is a hard error */

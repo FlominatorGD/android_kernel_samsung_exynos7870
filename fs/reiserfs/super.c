@@ -1410,7 +1410,6 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 	unsigned long safe_mask = 0;
 	unsigned int commit_max_age = (unsigned int)-1;
 	struct reiserfs_journal *journal = SB_JOURNAL(s);
-	char *new_opts = kstrdup(arg, GFP_KERNEL);
 	int err;
 	char *qf_names[REISERFS_MAXQUOTAS];
 	unsigned int qfmt = 0;
@@ -1563,13 +1562,13 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 	}
 
 out_ok_unlocked:
-	replace_mount_options(s, new_opts);
+	if (new_opts)
+		replace_mount_options(s, new_opts);
 	return 0;
 
 out_err_unlock:
 	reiserfs_write_unlock(s);
 out_err:
-	kfree(new_opts);
 	return err;
 }
 

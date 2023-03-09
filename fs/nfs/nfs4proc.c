@@ -944,6 +944,31 @@ static bool nfs4_clear_cap_atomic_open_v1(struct nfs_server *server,
 	return true;
 }
 
+static u32
+nfs4_map_atomic_open_share(struct nfs_server *server,
+		fmode_t fmode, int openflags)
+{
+	u32 res = 0;
+
+	switch (fmode & (FMODE_READ | FMODE_WRITE)) {
+	case FMODE_READ:
+		res = NFS4_SHARE_ACCESS_READ;
+		break;
+	case FMODE_WRITE:
+		res = NFS4_SHARE_ACCESS_WRITE;
+		break;
+	case FMODE_READ|FMODE_WRITE:
+		res = NFS4_SHARE_ACCESS_BOTH;
+	}
+	if (!(server->caps & NFS_CAP_ATOMIC_OPEN_V1))
+		goto out;
+	/* Want no delegation if we're using O_DIRECT */
+	if (openflags & O_DIRECT)
+		res |= NFS4_SHARE_WANT_NO_DELEG;
+out:
+	return res;
+}
+
 static enum open_claim_type4
 nfs4_map_atomic_open_claim(struct nfs_server *server,
 		enum open_claim_type4 claim)
@@ -1004,6 +1029,8 @@ static struct nfs4_opendata *nfs4_opendata_alloc(struct dentry *dentry,
 	atomic_inc(&sp->so_count);
 	p->o_arg.open_flags = flags;
 	p->o_arg.fmode = fmode & (FMODE_READ|FMODE_WRITE);
+	p->o_arg.share_access = nfs4_map_atomic_open_share(server,
+			fmode, flags);
 	/* don't put an ACCESS op in OPEN compound if O_EXCL, because ACCESS
 	 * will return permission denied for all bits until close */
 	if (!(flags & O_EXCL)) {
@@ -1089,6 +1116,21 @@ static int nfs4_wait_for_completion_rpc_task(struct rpc_task *task)
 
 	ret = rpc_wait_for_completion_task(task);
 	return ret;
+}
+
+static bool nfs4_mode_match_open_stateid(struct nfs4_state *state,
+		fmode_t fmode)
+{
+	switch(fmode & (FMODE_READ|FMODE_WRITE)) {
+	case FMODE_READ|FMODE_WRITE:
+		return state->n_rdwr != 0;
+	case FMODE_WRITE:
+		return state->n_wronly != 0;
+	case FMODE_READ:
+		return state->n_rdonly != 0;
+	}
+	WARN_ON_ONCE(1);
+	return false;
 }
 
 static int can_open_cached(struct nfs4_state *state, fmode_t mode, int open_mode)
@@ -1485,13 +1527,19 @@ static struct nfs4_opendata *nfs4_open_recoverdata_alloc(struct nfs_open_context
 	return opendata;
 }
 
-static int nfs4_open_recover_helper(struct nfs4_opendata *opendata, fmode_t fmode, struct nfs4_state **res)
+static int nfs4_open_recover_helper(struct nfs4_opendata *opendata,
+				    fmode_t fmode)
 {
 	struct nfs4_state *newstate;
+	struct nfs_server *server = NFS_SB(opendata->dentry->d_sb);
+	int openflags = opendata->o_arg.open_flags;
 	int ret;
 
-	opendata->o_arg.open_flags = 0;
+	if (!nfs4_mode_match_open_stateid(opendata->state, fmode))
+		return 0;
 	opendata->o_arg.fmode = fmode;
+	opendata->o_arg.share_access =
+		nfs4_map_atomic_open_share(server, fmode, openflags);
 	memset(&opendata->o_res, 0, sizeof(opendata->o_res));
 	memset(&opendata->c_res, 0, sizeof(opendata->c_res));
 	nfs4_init_opendata_res(opendata);
@@ -1501,14 +1549,14 @@ static int nfs4_open_recover_helper(struct nfs4_opendata *opendata, fmode_t fmod
 	newstate = nfs4_opendata_to_nfs4_state(opendata);
 	if (IS_ERR(newstate))
 		return PTR_ERR(newstate);
+	if (newstate != opendata->state)
+		ret = -ESTALE;
 	nfs4_close_state(newstate, fmode);
-	*res = newstate;
-	return 0;
+	return ret;
 }
 
 static int nfs4_open_recover(struct nfs4_opendata *opendata, struct nfs4_state *state)
 {
-	struct nfs4_state *newstate;
 	int ret;
 
 	/* Don't trigger recovery in nfs_test_and_clear_all_open_stateid */
@@ -1519,27 +1567,15 @@ static int nfs4_open_recover(struct nfs4_opendata *opendata, struct nfs4_state *
 	clear_bit(NFS_DELEGATED_STATE, &state->flags);
 	clear_bit(NFS_OPEN_STATE, &state->flags);
 	smp_rmb();
-	if (state->n_rdwr != 0) {
-		ret = nfs4_open_recover_helper(opendata, FMODE_READ|FMODE_WRITE, &newstate);
-		if (ret != 0)
-			return ret;
-		if (newstate != state)
-			return -ESTALE;
-	}
-	if (state->n_wronly != 0) {
-		ret = nfs4_open_recover_helper(opendata, FMODE_WRITE, &newstate);
-		if (ret != 0)
-			return ret;
-		if (newstate != state)
-			return -ESTALE;
-	}
-	if (state->n_rdonly != 0) {
-		ret = nfs4_open_recover_helper(opendata, FMODE_READ, &newstate);
-		if (ret != 0)
-			return ret;
-		if (newstate != state)
-			return -ESTALE;
-	}
+	ret = nfs4_open_recover_helper(opendata, FMODE_READ|FMODE_WRITE);
+	if (ret != 0)
+		return ret;
+	ret = nfs4_open_recover_helper(opendata, FMODE_WRITE);
+	if (ret != 0)
+		return ret;
+	ret = nfs4_open_recover_helper(opendata, FMODE_READ);
+	if (ret != 0)
+		return ret;
 	/*
 	 * We may have performed cached opens for all three recoveries.
 	 * Check if we need to update the current stateid.
@@ -1666,18 +1702,32 @@ static int nfs4_handle_delegation_recall_error(struct nfs_server *server, struct
 	return err;
 }
 
-int nfs4_open_delegation_recall(struct nfs_open_context *ctx, struct nfs4_state *state, const nfs4_stateid *stateid)
+int nfs4_open_delegation_recall(struct nfs_open_context *ctx,
+		struct nfs4_state *state, const nfs4_stateid *stateid,
+		fmode_t type)
 {
 	struct nfs_server *server = NFS_SERVER(state->inode);
 	struct nfs4_opendata *opendata;
-	int err;
+	int err = 0;
 
 	opendata = nfs4_open_recoverdata_alloc(ctx, state,
 			NFS4_OPEN_CLAIM_DELEG_CUR_FH);
 	if (IS_ERR(opendata))
 		return PTR_ERR(opendata);
 	nfs4_stateid_copy(&opendata->o_arg.u.delegation, stateid);
-	err = nfs4_open_recover(opendata, state);
+	clear_bit(NFS_DELEGATED_STATE, &state->flags);
+	switch (type & (FMODE_READ|FMODE_WRITE)) {
+	case FMODE_READ|FMODE_WRITE:
+	case FMODE_WRITE:
+		err = nfs4_open_recover_helper(opendata, FMODE_READ|FMODE_WRITE);
+		if (err)
+			break;
+		err = nfs4_open_recover_helper(opendata, FMODE_WRITE);
+		if (err)
+			break;
+	case FMODE_READ:
+		err = nfs4_open_recover_helper(opendata, FMODE_READ);
+	}
 	nfs4_opendata_put(opendata);
 	return nfs4_handle_delegation_recall_error(server, state, stateid, NULL, err);
 }
@@ -2057,10 +2107,15 @@ static int _nfs4_open_expired(struct nfs_open_context *ctx, struct nfs4_state *s
 	struct nfs4_opendata *opendata;
 	int ret;
 
-	opendata = nfs4_open_recoverdata_alloc(ctx, state,
-			NFS4_OPEN_CLAIM_FH);
+	opendata = nfs4_open_recoverdata_alloc(ctx, state, NFS4_OPEN_CLAIM_FH);
 	if (IS_ERR(opendata))
 		return PTR_ERR(opendata);
+	/*
+	 * We're not recovering a delegation, so ask for no delegation.
+	 * Otherwise the recovery thread could deadlock with an outstanding
+	 * delegation return.
+	 */
+	opendata->o_arg.open_flags = O_DIRECT;
 	ret = nfs4_open_recover(opendata, state);
 	if (ret == -ESTALE)
 		d_drop(ctx->dentry);
@@ -2666,6 +2721,9 @@ static void nfs4_close_prepare(struct rpc_task *task, void *data)
 			goto out_wait;
 		    }
 	}
+	calldata->arg.share_access =
+		nfs4_map_atomic_open_share(NFS_SERVER(inode),
+				calldata->arg.fmode, 0);
 
 	nfs_fattr_init(calldata->res.fattr);
 	calldata->timestamp = jiffies;

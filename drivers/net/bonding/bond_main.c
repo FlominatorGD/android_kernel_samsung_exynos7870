@@ -1880,10 +1880,10 @@ static int bond_slave_info_query(struct net_device *bond_dev, struct ifslave *in
 /* called with rcu_read_lock() */
 static int bond_miimon_inspect(struct bonding *bond)
 {
+	bool ignore_updelay = false;
 	int link_state, commit = 0;
 	struct list_head *iter;
 	struct slave *slave;
-	bool ignore_updelay;
 
 	ignore_updelay = !rcu_dereference(bond->curr_active_slave);
 
@@ -1982,15 +1982,6 @@ static void bond_miimon_commit(struct bonding *bond)
 	bond_for_each_slave(bond, slave, iter) {
 		switch (slave->new_link) {
 		case BOND_LINK_NOCHANGE:
-			/* For 802.3ad mode, check current slave speed and
-			 * duplex again in case its port was disabled after
-			 * invalid speed/duplex reporting but recovered before
-			 * link monitoring could make a decision on the actual
-			 * link status
-			 */
-			if (BOND_MODE(bond) == BOND_MODE_8023AD &&
-			    slave->link == BOND_LINK_UP)
-				bond_3ad_adapter_speed_duplex_changed(slave);
 			continue;
 
 		case BOND_LINK_UP:

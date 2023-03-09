@@ -457,8 +457,6 @@ static int start_dl_timer(struct sched_dl_entity *dl_se, bool boosted)
 	struct dl_rq *dl_rq = dl_rq_of_se(dl_se);
 	struct rq *rq = rq_of_dl_rq(dl_rq);
 	ktime_t now, act;
-	ktime_t soft, hard;
-	unsigned long range;
 	s64 delta;
 
 	if (boosted)
@@ -481,15 +479,9 @@ static int start_dl_timer(struct sched_dl_entity *dl_se, bool boosted)
 	if (ktime_us_delta(act, now) < 0)
 		return 0;
 
-	hrtimer_set_expires(&dl_se->dl_timer, act);
+	hrtimer_start(&dl_se->dl_timer, act, HRTIMER_MODE_ABS);
 
-	soft = hrtimer_get_softexpires(&dl_se->dl_timer);
-	hard = hrtimer_get_expires(&dl_se->dl_timer);
-	range = ktime_to_ns(ktime_sub(hard, soft));
-	__hrtimer_start_range_ns(&dl_se->dl_timer, soft,
-				 range, HRTIMER_MODE_ABS, 0);
-
-	return hrtimer_active(&dl_se->dl_timer);
+	return 1;
 }
 
 /*
@@ -511,16 +503,10 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 						     struct sched_dl_entity,
 						     dl_timer);
 	struct task_struct *p = dl_task_of(dl_se);
+	unsigned long flags;
 	struct rq *rq;
-again:
-	rq = task_rq(p);
-	raw_spin_lock(&rq->lock);
 
-	if (rq != task_rq(p)) {
-		/* Task was moved, retrying. */
-		raw_spin_unlock(&rq->lock);
-		goto again;
-	}
+	rq = task_rq_lock(p, &flags);
 
 	/*
 	 * We need to take care of several possible races here:
@@ -559,7 +545,7 @@ again:
 #endif
 	}
 unlock:
-	raw_spin_unlock(&rq->lock);
+	task_rq_unlock(rq, p, &flags);
 
 	return HRTIMER_NORESTART;
 }

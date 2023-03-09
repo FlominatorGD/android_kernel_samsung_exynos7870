@@ -336,13 +336,14 @@ static void md_end_flush(struct bio *bio, int err)
 	struct md_rdev *rdev = bio->bi_private;
 	struct mddev *mddev = rdev->mddev;
 
+	bio_put(bio);
+
 	rdev_dec_pending(rdev, mddev);
 
 	if (atomic_dec_and_test(&mddev->flush_pending)) {
 		/* The pre-request flush has finished */
 		queue_work(md_wq, &mddev->flush_work);
 	}
-	bio_put(bio);
 }
 
 static void md_submit_flush_data(struct work_struct *ws);
@@ -721,9 +722,12 @@ static void super_written(struct bio *bio, int error)
 		md_error(mddev, rdev);
 	}
 
+	bio_put(bio);
+
+	rdev_dec_pending(rdev, mddev);
+
 	if (atomic_dec_and_test(&mddev->pending_writes))
 		wake_up(&mddev->sb_wait);
-	bio_put(bio);
 }
 
 void md_super_write(struct mddev *mddev, struct md_rdev *rdev,
@@ -736,6 +740,8 @@ void md_super_write(struct mddev *mddev, struct md_rdev *rdev,
 	 * If an error occurred, call md_error
 	 */
 	struct bio *bio = bio_alloc_mddev(GFP_NOIO, 1, mddev);
+
+	atomic_inc(&rdev->nr_pending);
 
 	bio->bi_bdev = rdev->meta_bdev ? rdev->meta_bdev : rdev->bdev;
 	bio->bi_iter.bi_sector = sector;
